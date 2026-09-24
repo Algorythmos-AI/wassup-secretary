@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from tests.tenancy.conftest import Seed
+from tests.support.database import Seed
 
 pytestmark = pytest.mark.db
 
@@ -28,8 +28,8 @@ DEFINER_ALLOWLIST = {"resolve_clinic_for_call", "staff_clinic_ids", "active_clin
 NON_RLS_WITH_CLINIC = {"retell_events_raw"}
 
 
-def test_every_table_with_clinic_id_forces_rls(engine: Engine, seed: Seed) -> None:
-    with engine.connect() as conn:
+def test_every_table_with_clinic_id_forces_rls(db_engine: Engine, seed: Seed) -> None:
+    with db_engine.connect() as conn:
         rows = conn.execute(
             text(
                 """
@@ -52,8 +52,8 @@ def test_every_table_with_clinic_id_forces_rls(engine: Engine, seed: Seed) -> No
     assert offenders == [], f"tables with clinic_id but no forced RLS policy: {offenders}"
 
 
-def test_no_app_role_is_superuser_or_bypasses_rls(engine: Engine) -> None:
-    with engine.connect() as conn:
+def test_no_app_role_is_superuser_or_bypasses_rls(db_engine: Engine) -> None:
+    with db_engine.connect() as conn:
         rows = conn.execute(
             text(
                 "SELECT rolname FROM pg_roles WHERE rolname = ANY(:r) AND (rolsuper OR rolbypassrls)"
@@ -63,8 +63,8 @@ def test_no_app_role_is_superuser_or_bypasses_rls(engine: Engine) -> None:
     assert rows == []
 
 
-def test_security_definer_functions_are_allowlisted_and_pin_search_path(engine: Engine) -> None:
-    with engine.connect() as conn:
+def test_security_definer_functions_are_allowlisted_and_pin_search_path(db_engine: Engine) -> None:
+    with db_engine.connect() as conn:
         rows = conn.execute(
             text(
                 """
@@ -86,8 +86,8 @@ def test_security_definer_functions_are_allowlisted_and_pin_search_path(engine: 
     assert unpinned == []
 
 
-def test_views_use_security_invoker(engine: Engine) -> None:
-    with engine.connect() as conn:
+def test_views_use_security_invoker(db_engine: Engine) -> None:
+    with db_engine.connect() as conn:
         rows = conn.execute(
             text(
                 """
@@ -102,16 +102,16 @@ def test_views_use_security_invoker(engine: Engine) -> None:
     assert rows == [], f"views bypassing RLS (need security_invoker): {[r.relname for r in rows]}"
 
 
-def test_no_materialized_views_over_tenant_data(engine: Engine) -> None:
-    with engine.connect() as conn:
+def test_no_materialized_views_over_tenant_data(db_engine: Engine) -> None:
+    with db_engine.connect() as conn:
         count = conn.execute(
             text("SELECT count(*) FROM pg_matviews WHERE schemaname = 'public'")
         ).scalar()
     assert count == 0
 
 
-def test_objects_are_owned_by_the_owner_role(engine: Engine) -> None:
-    with engine.connect() as conn:
+def test_objects_are_owned_by_the_owner_role(db_engine: Engine) -> None:
+    with db_engine.connect() as conn:
         rows = conn.execute(
             text(
                 """
@@ -125,10 +125,10 @@ def test_objects_are_owned_by_the_owner_role(engine: Engine) -> None:
     assert wrong == []
 
 
-def test_non_isolation_policies_are_resolver_read_only(engine: Engine) -> None:
+def test_non_isolation_policies_are_resolver_read_only(db_engine: Engine) -> None:
     """Every policy is either the clinic-isolation policy, or a FOR SELECT policy for the
     resolver role on a routing table. Nothing else may open a table up."""
-    with engine.connect() as conn:
+    with db_engine.connect() as conn:
         rows = conn.execute(
             text(
                 """
@@ -150,8 +150,8 @@ def test_non_isolation_policies_are_resolver_read_only(engine: Engine) -> None:
     assert unexpected == []
 
 
-def test_resolver_role_cannot_read_call_data(engine: Engine) -> None:
-    with engine.connect() as conn:
+def test_resolver_role_cannot_read_call_data(db_engine: Engine) -> None:
+    with db_engine.connect() as conn:
         rows = conn.execute(
             text(
                 """
@@ -163,8 +163,8 @@ def test_resolver_role_cannot_read_call_data(engine: Engine) -> None:
     assert {r.table_name for r in rows} <= RESOLVER_READABLE | {"staff_users"}
 
 
-def test_resolver_functions_are_owned_by_resolver_role(engine: Engine) -> None:
-    with engine.connect() as conn:
+def test_resolver_functions_are_owned_by_resolver_role(db_engine: Engine) -> None:
+    with db_engine.connect() as conn:
         rows = conn.execute(
             text(
                 """

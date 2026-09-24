@@ -1,4 +1,4 @@
-"""Tenancy test harness: a throwaway database, migrated exactly as production is.
+"""Shared DB test harness: a throwaway database, migrated exactly as production is.
 
 Needs TEST_DATABASE_ADMIN_URL (a superuser URL on a disposable Postgres — CI provides one).
 The harness creates a fresh database, applies ``db/roles.sql`` and ``db/grant_database.sql``,
@@ -23,8 +23,6 @@ from sqlalchemy.engine import Connection, Engine
 ROOT = Path(__file__).resolve().parents[2]
 ADMIN_URL = os.environ.get("TEST_DATABASE_ADMIN_URL")
 
-pytestmark = pytest.mark.db
-
 
 @dataclass(frozen=True)
 class Seed:
@@ -41,7 +39,7 @@ def _sqlalchemy_url(url: str) -> str:
 
 
 @pytest.fixture(scope="session")
-def engine() -> Iterator[Engine]:
+def db_engine() -> Iterator[Engine]:
     if not ADMIN_URL:
         pytest.skip("TEST_DATABASE_ADMIN_URL not set (tenancy tests need a disposable Postgres)")
     admin_url = make_url(_sqlalchemy_url(ADMIN_URL))
@@ -94,11 +92,17 @@ def as_role(conn: Connection, role: str, clinics: list[uuid.UUID] | None) -> Non
 
 
 @pytest.fixture(scope="session")
-def seed(engine: Engine) -> Seed:
+def db_url(db_engine: Engine) -> str:
+    """URL of the migrated test database (superuser; tests narrow it with SET ROLE)."""
+    return db_engine.url.render_as_string(hide_password=False)
+
+
+@pytest.fixture(scope="session")
+def seed(db_engine: Engine) -> Seed:
     """Two synthetic clinics with one call each, written by the owner under an explicit context."""
     a, b = uuid.uuid4(), uuid.uuid4()
     call_a, call_b = uuid.uuid4(), uuid.uuid4()
-    with engine.connect() as conn, conn.begin():
+    with db_engine.connect() as conn, conn.begin():
         org = conn.execute(
             text("INSERT INTO organizations (name) VALUES ('Test Org') RETURNING id")
         ).scalar_one()

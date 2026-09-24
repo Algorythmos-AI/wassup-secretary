@@ -33,6 +33,7 @@ ignore = ["PLR0913", "PLR2004"]
 # SQL is kept verbatim and readable in migrations and DB tests; don't wrap it for line length.
 "db/migrations/**" = ["E501"]
 "tests/tenancy/**" = ["S101", "E501"]
+"tests/support/**" = ["S101", "E501"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -44,4 +45,5 @@ plugins = ["pydantic.mypy"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-ra --strict-markers --import-mode=importlib"
+pythonpath = ["."]
 markers = ["db: needs a real Postgres (DATABASE_URL)"]

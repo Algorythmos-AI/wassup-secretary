@@ -344,6 +344,8 @@ GRANT SELECT ON clinics TO app_voice;
 GRANT SELECT, INSERT, UPDATE ON calls, messages, promises, tool_invocations TO app_voice;
 GRANT SELECT, INSERT, UPDATE ON retell_events_raw TO app_voice;
 GRANT INSERT ON quarantine_events, outbox_events, audit_log TO app_voice;
+-- INSERT … ON CONFLICT (dedupe_key) DO NOTHING needs SELECT on the conflict column only.
+GRANT SELECT (dedupe_key) ON outbox_events TO app_voice;
 GRANT SELECT (id, clinic_id, first_name, last_name, date_of_birth, phone, is_deceased)
   ON patients TO app_voice;
 

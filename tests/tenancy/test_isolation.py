@@ -14,16 +14,31 @@ from tests.support.database import Seed, as_role
 pytestmark = pytest.mark.db
 
 
-def _call_ids(db_engine: Engine, role: str, clinics: list[uuid.UUID] | None) -> set[uuid.UUID]:
+def _visible(
+    db_engine: Engine, role: str, clinics: list[uuid.UUID] | None
+) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    """(call id, clinic id) of every call the role can see under the given context."""
     with db_engine.connect() as conn, conn.begin():
         as_role(conn, role, clinics)
-        return {row[0] for row in conn.execute(text("SELECT id FROM calls"))}
+        return [(r[0], r[1]) for r in conn.execute(text("SELECT id, clinic_id FROM calls"))]
+
+
+def _call_ids(db_engine: Engine, role: str, clinics: list[uuid.UUID] | None) -> set[uuid.UUID]:
+    return {call_id for call_id, _ in _visible(db_engine, role, clinics)}
 
 
 @pytest.mark.parametrize("role", ["app_core", "app_voice", "app_ops"])
 def test_each_role_sees_only_its_declared_clinic(db_engine: Engine, seed: Seed, role: str) -> None:
-    assert _call_ids(db_engine, role, [seed.clinic_a]) == {seed.call_a}
-    assert _call_ids(db_engine, role, [seed.clinic_b]) == {seed.call_b}
+    # Other tests add calls to the shared database, so assert the property, not an exact set:
+    # every visible row belongs to the declared clinic, and the other clinic's seed is invisible.
+    for clinic, own_call, other_call in (
+        (seed.clinic_a, seed.call_a, seed.call_b),
+        (seed.clinic_b, seed.call_b, seed.call_a),
+    ):
+        visible = _visible(db_engine, role, [clinic])
+        assert {c for _, c in visible} == {clinic}
+        ids = {i for i, _ in visible}
+        assert own_call in ids and other_call not in ids
 
 
 @pytest.mark.parametrize("role", ["app_core", "app_voice", "app_ops", "wassup_owner"])
@@ -32,10 +47,8 @@ def test_no_context_means_zero_rows(db_engine: Engine, seed: Seed, role: str) ->
 
 
 def test_multi_clinic_context_sees_both(db_engine: Engine, seed: Seed) -> None:
-    assert _call_ids(db_engine, "app_core", [seed.clinic_a, seed.clinic_b]) == {
-        seed.call_a,
-        seed.call_b,
-    }
+    ids = _call_ids(db_engine, "app_core", [seed.clinic_a, seed.clinic_b])
+    assert {seed.call_a, seed.call_b} <= ids
 
 
 def test_cannot_write_into_another_clinic(db_engine: Engine, seed: Seed) -> None:
@@ -63,7 +76,8 @@ def test_cannot_move_a_row_to_another_clinic(db_engine: Engine, seed: Seed) -> N
 
 def test_owner_is_also_subject_to_rls(db_engine: Engine, seed: Seed) -> None:
     """FORCE ROW LEVEL SECURITY: even the table owner needs a clinic context."""
-    assert _call_ids(db_engine, "wassup_owner", [seed.clinic_a]) == {seed.call_a}
+    visible = _visible(db_engine, "wassup_owner", [seed.clinic_a])
+    assert {c for _, c in visible} == {seed.clinic_a}
 
 
 def test_resolver_requires_agent_and_number_to_agree(db_engine: Engine, seed: Seed) -> None:

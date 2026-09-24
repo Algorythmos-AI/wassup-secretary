@@ -1,18 +1,22 @@
-"""ops-worker: scheduled and background jobs. Exposes /health for the platform and monitors."""
+"""ops-worker: scheduled and background jobs. Exposes /health endpoints for monitors."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.app import create_app
 from wassup_core.db import make_engine
 
+from ops_worker import canary
+from ops_worker.health_routes import router as health_router
 from ops_worker.notifier import EmailSender, NotConfiguredSender, ResendEmailSender
 from ops_worker.outbox import process_batch
+from ops_worker.retell_api import RetellApi, RetellClient
 from ops_worker.scheduler import run_every
 from ops_worker.settings import OpsWorkerSettings
 
@@ -25,12 +29,30 @@ def email_sender(settings: OpsWorkerSettings) -> EmailSender:
     return NotConfiguredSender()
 
 
+def canary_config(settings: OpsWorkerSettings) -> canary.CanaryConfig:
+    return canary.CanaryConfig(
+        enabled=settings.canary_enabled,
+        agent_id=settings.canary_agent_id,
+        agent_version=settings.canary_agent_version,
+        local_time=settings.canary_local_time,
+        timezone=settings.canary_timezone,
+        lines=settings.ai_lines,
+        ops_emails=settings.ops_emails,
+    )
+
+
 def build_app(
-    settings: OpsWorkerSettings | None = None, engine: AsyncEngine | None = None
+    settings: OpsWorkerSettings | None = None,
+    engine: AsyncEngine | None = None,
+    retell: RetellApi | None = None,
 ) -> FastAPI:
     settings = settings or OpsWorkerSettings()
-    app = create_app(settings)
+    app = create_app(settings, [health_router])
     app.state.engine = engine
+    app.state.canary_config = canary_config(settings)
+    if retell is None and settings.retell_api_key is not None:
+        retell = RetellClient(settings.retell_api_key.get_secret_value())
+    app.state.retell = retell
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -43,7 +65,7 @@ def build_app(
         tasks: list[asyncio.Task[None]] = []
         if settings.scheduler_enabled and app.state.engine is not None:
             sender = email_sender(settings)
-            eng = app.state.engine
+            eng: AsyncEngine = app.state.engine
 
             async def outbox_job() -> int:
                 return await process_batch(
@@ -63,6 +85,19 @@ def build_app(
                     )
                 )
             )
+            cfg: canary.CanaryConfig = app.state.canary_config
+            live_retell: RetellApi | None = app.state.retell
+            if cfg.enabled and live_retell is not None:
+                retell_api: RetellApi = live_retell
+
+                async def canary_job() -> dict[str, int]:
+                    return await canary.tick(eng, retell_api, sender, cfg, datetime.now(UTC))
+
+                tasks.append(
+                    asyncio.create_task(
+                        run_every("canary", 60.0, canary_job, settings.canary_heartbeat_url)
+                    )
+                )
         try:
             yield
         finally:

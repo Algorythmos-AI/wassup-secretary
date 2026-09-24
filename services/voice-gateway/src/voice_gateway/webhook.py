@@ -64,6 +64,8 @@ async def retell_webhook(request: Request) -> Response:  # noqa: PLR0911 — one
         async with unscoped(engine) as conn:
             raw_id = await store.store_raw(conn, event, record, payload)
             if is_synthetic(call, settings.ai_lines):
+                if call.get("direction") != "outbound":  # the answered leg proves the line works
+                    await store.record_canary_receipt(conn, record.to_number)
                 await store.mark_raw(conn, raw_id, error=None)
                 log.info("synthetic_call", call_id=record.provider_call_id, event_type=event)
                 return Response(status_code=204)

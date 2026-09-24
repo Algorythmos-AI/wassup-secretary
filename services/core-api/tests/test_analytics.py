@@ -158,7 +158,11 @@ async def test_default_range_is_the_last_30_clinic_days(
 
 @pytest.mark.parametrize(
     "params",
-    [{"from": "2026-09-10", "to": "2026-09-01"}, {"from": "2020-01-01", "to": "2026-09-01"}],
+    [
+        {"from": "2026-09-10", "to": "2026-09-01"},
+        {"from": "2020-01-01", "to": "2026-09-01"},
+        {"to": "0001-01-05"},  # the default 30-day window would start before year 1
+    ],
 )
 async def test_invalid_ranges_are_400(
     client: httpx.AsyncClient, clinic: uuid.UUID, params: dict[str, str]

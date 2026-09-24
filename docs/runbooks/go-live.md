@@ -94,7 +94,9 @@ Then add staff: a `staff_users` row keyed by their Firebase uid, plus `clinic_me
 - Alert on non-2xx from ops-worker `/health/replay`, which covers webhook events or tool requests that couldn't be processed. See the [runbook](replay-exhausted.md).
 - Alert on non-2xx from ops-worker `/health/telephony`: the account is suspended or closed, the balance is below the floor, a line number is missing from the account, or the check is stale. This is the September 2026 outage, caught in minutes.
 - Alert on non-2xx from ops-worker `/health/voice-config`, which fires when a clinic number is not bound to its clinic's agent, is on a draft or "latest" version, is not on the pinned version, or is on a version whose webhook isn't ours.
-- Heartbeat monitors: `WASSUP_OUTBOX_HEARTBEAT_URL`, `WASSUP_CANARY_HEARTBEAT_URL`, `WASSUP_REPLAY_HEARTBEAT_URL`, `WASSUP_TELEPHONY_HEARTBEAT_URL` and `WASSUP_VOICE_CONFIG_HEARTBEAT_URL`.
+- Alert on non-2xx from ops-worker `/health/quarantine`, which fires while signed calls that couldn't be matched to a clinic await a decision. See the [runbook](quarantine.md).
+- Heartbeat monitors: `WASSUP_OUTBOX_HEARTBEAT_URL`, `WASSUP_CANARY_HEARTBEAT_URL`, `WASSUP_REPLAY_HEARTBEAT_URL`, `WASSUP_TELEPHONY_HEARTBEAT_URL`, `WASSUP_VOICE_CONFIG_HEARTBEAT_URL` and `WASSUP_QUARANTINE_HEARTBEAT_URL`.
+- A service's own `/health` answers 503 `not_ready` until the database schema it needs is in place. Railway therefore holds a deploy until ops-worker's pre-deploy migration has run.
 - These endpoints are unauthenticated but cached and single-flight: at most one database or provider query per probe every 15–60 s.
 
 ## 6. Daily line check

@@ -45,9 +45,9 @@ Web dashboard (React) — staging and production are separate projects
 ## Delivery status (25 Sep 2026)
 | Phase | Scope | State |
 |---|---|---|
-| 1 | Repo, CI, rulesets, workspace, service skeletons | done |
-| 2 | Database roles, tenancy schema, isolation tests, tenancy-aware DB layer | done |
-| 3 | ops-worker: outbox + urgent alerts, line-check canary, ingestion-gap check, replay of unfinished webhook events and tool requests, monitor endpoints | done (canary awaits outbound telephony) |
-| 4 | voice-gateway: signed ingestion, idempotent tools with budgets | done — per-clinic cutover pending infrastructure |
-| 5 | core-api: staff auth, calls API, workflow | done (API); dashboard UI still served by the legacy app |
-| 6 | Staging/production infrastructure, clinic cutover, legacy import, decommission | owner actions — see `docs/runbooks/go-live.md` |
+| 1 | Repo, CI, rulesets, workspace, service skeletons, Railway config-as-code | done |
+| 2 | Database roles, tenancy schema, isolation tests, tenancy-aware DB layer, hash-chained audit | done |
+| 3 | ops-worker: outbox and urgent alerts, replay, retention; monitors for the line-check canary, ingestion gap, telephony account, voice configuration, quarantine, outbox and replay | done (canary awaits outbound telephony; monitors await provider keys) |
+| 4 | voice-gateway: signed ingestion, idempotent tools with budgets and truthful fallbacks; `wassup` CLI for cutover and rollback | done. Per-clinic cutover is pending infrastructure |
+| 5 | core-api: staff auth, calls API, workflow, analytics summary, live events (SSE) | API done. The dashboard UI is still served by the legacy app. The domain classifier (priority and reception action) waits for the repo to be private again (ADR 0007) |
+| 6 | Staging and production infrastructure, clinic cutover, legacy import, decommission | owner actions (see `docs/runbooks/go-live.md`) |

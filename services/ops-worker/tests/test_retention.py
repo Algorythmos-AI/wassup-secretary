@@ -58,8 +58,10 @@ def _seed(db_engine: Engine, tag: str) -> None:
             )
         conn.execute(
             text(
-                "INSERT INTO quarantine_events (reason, payload, received_at) VALUES "
-                "(:r, '{}'::jsonb, now() - interval '100 days'), (:r, '{}'::jsonb, now())"
+                "INSERT INTO quarantine_events (reason, payload, received_at, resolved_at) VALUES "
+                "(:r, '{}'::jsonb, now() - interval '100 days', now()), "  # old, resolved: goes
+                "(:r, '{}'::jsonb, now() - interval '100 days', NULL), "  # old, open: stays
+                "(:r, '{}'::jsonb, now(), now())"  # recent: stays
             ),
             {"r": f"test:{tag}"},
         )
@@ -94,9 +96,10 @@ async def test_only_finished_rows_past_retention_are_deleted(
     deleted = await retention.run(ops_engine, timedelta(days=90))
     assert all(count >= 1 for count in deleted.values())
     events, requests, quarantined = _left(db_engine, tag)
-    assert events == {"old_open", "new_done"}  # unresolved rows wait for an operator
+    # unresolved rows wait for an operator; a quarantined call is never deleted unresolved
+    assert events == {"old_quarantined", "old_open", "new_done"}
     assert requests == {"old_quarantined", "old_open", "new_done"}  # not completed = kept
-    assert quarantined == 1
+    assert quarantined == 2
     assert await retention.run(ops_engine, timedelta(days=90)) == dict.fromkeys(deleted, 0)
 
 
@@ -107,8 +110,8 @@ async def test_batches_cover_large_backlogs(
     with db_engine.connect() as conn, conn.begin():
         conn.execute(
             text(
-                "INSERT INTO quarantine_events (reason, payload, received_at) "
-                "SELECT :r, '{}'::jsonb, now() - interval '200 days' FROM generate_series(1, 25)"
+                "INSERT INTO quarantine_events (reason, payload, received_at, resolved_at) "
+                "SELECT :r, '{}'::jsonb, now() - interval '200 days', now() FROM generate_series(1, 25)"
             ),
             {"r": f"test:{tag}"},
         )

@@ -211,3 +211,53 @@ def test_rollback_refuses_to_restore_a_floating_binding(
 def test_main_needs_the_key_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RETELL_API_KEY", raising=False)
     assert main(["voice", "bindings"]) == 2
+
+
+def test_rollback_steps_back_one_rebind_at_a_time(provider: FakeProvider, tmp_path: Path) -> None:
+    """v1 -> v2 -> v4, then rollback twice: v2, then v1 (not a flip-flop back to v4)."""
+    provider.versions[("agent_a", 4)] = {"is_published": True}
+    state = ["--state-dir", str(tmp_path)]
+    for version in ("2", "4"):
+        _run(
+            provider,
+            "voice",
+            "rebind",
+            NUMBER,
+            "--agent",
+            "agent_a",
+            "--version",
+            version,
+            "--apply",
+            *state,
+        )
+    _run(provider, "voice", "rollback", NUMBER, "--apply", *state)
+    assert provider.numbers[NUMBER]["inbound_agents"] == [_route("agent_a", 2)]
+    _run(provider, "voice", "rollback", NUMBER, "--apply", *state)
+    assert provider.numbers[NUMBER]["inbound_agents"] == [_route("agent_a", 1)]
+    with pytest.raises(CliError, match="left to roll back"):
+        _run(provider, "voice", "rollback", NUMBER, "--apply", *state)
+
+
+def test_rollback_refuses_to_undo_someone_elses_change(
+    provider: FakeProvider, tmp_path: Path
+) -> None:
+    state = ["--state-dir", str(tmp_path)]
+    _run(
+        provider,
+        "voice",
+        "rebind",
+        NUMBER,
+        "--agent",
+        "agent_a",
+        "--version",
+        "2",
+        "--apply",
+        *state,
+    )
+    provider.versions[("agent_a", 5)] = {"is_published": True}
+    provider.numbers[NUMBER]["inbound_agents"] = [_route("agent_a", 5)]  # another operator
+    with pytest.raises(CliError, match="someone changed it since"):
+        _run(provider, "voice", "rollback", NUMBER, "--apply", *state)
+    assert provider.numbers[NUMBER]["inbound_agents"] == [_route("agent_a", 5)]
+    _run(provider, "voice", "rollback", NUMBER, "--apply", "--force", *state)
+    assert provider.numbers[NUMBER]["inbound_agents"] == [_route("agent_a", 1)]

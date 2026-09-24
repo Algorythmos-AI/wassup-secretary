@@ -96,7 +96,8 @@ async def test_unreachable_provider_is_unknown_then_stale(monkeypatch: pytest.Mo
     assert monitor.report()["status"] == "ok"
     api.unavailable = True
     clock[0] += telephony.STALE_AFTER_S + 1
-    assert await telephony.tick(monitor, api, FakeSender()) == "unknown"
+    with pytest.raises(telephony.TelephonyUnavailable):  # the job fails: no heartbeat ping
+        await telephony.tick(monitor, api, FakeSender())
     assert monitor.report() | {} == {**monitor.report(), "status": "failing", "reason": "stale"}
 
 
@@ -166,3 +167,11 @@ async def test_health_endpoint_states() -> None:
     ) as client:
         response = await client.get("/health/telephony")
     assert response.status_code == 200 and response.json()["status"] == "ok"
+
+
+async def test_health_report_hides_the_balance() -> None:
+    monitor = _monitor()
+    await telephony.tick(monitor, FakeApi(balance="9.14"), FakeSender())
+    report = monitor.report()
+    assert report["problems"] == ["balance_low"]
+    assert "balance" not in report and "currency" not in report

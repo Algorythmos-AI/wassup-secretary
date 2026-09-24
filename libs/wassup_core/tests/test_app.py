@@ -101,3 +101,23 @@ def test_environment_defaults_to_production(monkeypatch: pytest.MonkeyPatch) -> 
     settings = BaseServiceSettings()
     assert settings.environment is Environment.PRODUCTION
     assert not settings.expose_api_docs
+
+
+def test_health_waits_for_readiness_then_stays_ready() -> None:
+    """A service whose schema isn't in place yet must fail its health check, so the platform
+    doesn't route traffic to it; once ready, it isn't re-checked on every probe."""
+    answers = ["schema_behind", None]
+    calls: list[int] = []
+
+    async def readiness(_app: object) -> str | None:
+        calls.append(1)
+        return answers.pop(0) if answers else "should_not_be_asked_again"
+
+    settings = BaseServiceSettings(service_name="svc", environment=Environment.TEST)
+    client = TestClient(create_app(settings, readiness=readiness))  # type: ignore[arg-type]
+    first = client.get("/health")
+    assert first.status_code == 503
+    assert (first.json()["status"], first.json()["reason"]) == ("not_ready", "schema_behind")
+    assert client.get("/health").status_code == 200
+    assert client.get("/health").status_code == 200
+    assert len(calls) == 2

@@ -29,6 +29,13 @@ The architecture and its decisions live in `docs/architecture.md` and `docs/adr/
 `make ci` is green locally. The same checks run in CI, and the required check is `ci-gate`.
 New behaviour has tests. A migration comes with a tenancy test for any new tenant table.
 
+## Migrations
+- Forward-only, one transaction per revision (`db/migrations/env.py`), always `SET ROLE wassup_owner`.
+- SQL is fixed literal text. There is no string-built SQL anywhere, and no `noqa: S608`.
+- **Bump the readiness probe.** If a service's code needs a new schema object, change that service's `SCHEMA_PROBE` in the same PR. The service's `/health` then stays 503 until the migration has run, and the deploy won't go live early.
+- **Big tables.** Once a table the phone path writes to (`calls`, `outbox_events`, `retell_events_raw`, `tool_requests_raw`, `audit_log`) holds real volume, build indexes with `CREATE INDEX CONCURRENTLY` inside `op.get_context().autocommit_block()`. Use expand, then backfill, then contract for column changes. A plain `CREATE INDEX` blocks writers while it runs.
+- **Definer functions** pin `search_path = pg_catalog, public, pg_temp` and are added to `DEFINER_ALLOWLIST` in `tests/tenancy/test_structure.py` with their owner role.
+
 ## Data (never relaxed)
 - **No real patient, caller, staff or clinic data anywhere:** not in code, fixtures, logs,
   commit messages or PR text. Use obviously synthetic values: `+61400000xxx` numbers,

@@ -15,6 +15,7 @@ from core_api.settings import CoreApiSettings
 from core_api.staff import Staff
 from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.db import make_engine
 from wassup_core.settings import Environment
@@ -69,15 +70,19 @@ def _app(engine: AsyncEngine, max_seconds: float = 0.6) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=transport, base_url="http://test")
 
 
-def _emit(db_engine: Engine, clinic: uuid.UUID, event_type: str, payload: str = "{}") -> int:
+_INSERT = text(
+    "INSERT INTO outbox_events (clinic_id, event_type, dedupe_key, payload, status) "
+    "VALUES (:c, :t, :k, CAST(:p AS jsonb), 'done') RETURNING xact_id || '-' || id"
+)
+
+
+def _emit(db_engine: Engine, clinic: uuid.UUID, event_type: str, payload: str = "{}") -> str:
+    """Insert an event; returns its stream cursor (``<xact>-<id>``)."""
     with db_engine.connect() as conn, conn.begin():
         as_role(conn, "wassup_owner", [clinic])
-        return int(
+        return str(
             conn.execute(
-                text(
-                    "INSERT INTO outbox_events (clinic_id, event_type, dedupe_key, payload, status) "
-                    "VALUES (:c, :t, :k, CAST(:p AS jsonb), 'done') RETURNING id"
-                ),
+                _INSERT,
                 {"c": clinic, "t": event_type, "k": f"test:{uuid.uuid4().hex}", "p": payload},
             ).scalar_one()
         )
@@ -115,9 +120,9 @@ async def test_resume_delivers_only_this_clinics_events_in_order(
     _emit(db_engine, seed.clinic_b, "message.urgent", '{"call": "call_other_clinic"}')
     second = _emit(db_engine, seed.clinic_a, "call.workflow", '{"call_id": "a1", "version": 2}')
     async with _app(core_engine) as client:
-        frames = await _read(client, seed.clinic_a, **{"Last-Event-ID": str(before)})
+        frames = await _read(client, seed.clinic_a, **{"Last-Event-ID": before})
     delivered = [(f["id"], f["event"]) for f in frames if "id" in f and f["event"] != "reauth"]
-    assert delivered == [(str(first), "message.urgent"), (str(second), "call.workflow")]
+    assert delivered == [(first, "message.urgent"), (second, "call.workflow")]
     assert "call_other_clinic" not in str(frames)
     assert frames[-1]["event"] == "reauth"  # the stream ended at its time limit, on purpose
 
@@ -143,7 +148,7 @@ async def test_far_behind_gets_a_reset_not_a_flood(
     for _ in range(3):
         _emit(db_engine, seed.clinic_a, "call.analyzed")
     async with _app(core_engine) as client:
-        frames = await _read(client, seed.clinic_a, **{"Last-Event-ID": str(start)})
+        frames = await _read(client, seed.clinic_a, **{"Last-Event-ID": start})
     assert [f["event"] for f in frames] == ["reset", "reauth"]
 
 
@@ -201,6 +206,64 @@ async def test_stream_never_outlives_the_sign_in(core_engine: AsyncEngine, seed:
     assert "event: reauth" in chunks[-1] and time.monotonic() - started < 1
 
 
-@pytest.mark.parametrize("value", ["abc", "-5", "١٢", "9" * 40])
+@pytest.mark.parametrize("value", ["abc", "-5", "12", "١٢-3", "1-2-3", "9" * 40 + "-1", ""])
 def test_resume_point_rejects_junk(value: str) -> None:
-    assert events._resume_point(value) in (None, int("9" * 18))
+    assert events._resume_point(value) is None
+
+
+def test_resume_point_parses_a_cursor() -> None:
+    assert events._resume_point("123-45") == (123, 45)
+
+
+async def test_out_of_order_commits_are_never_skipped(
+    core_engine: AsyncEngine, db_engine: Engine, seed: Seed
+) -> None:
+    """The reviewer's race: event A gets the lower id but commits AFTER event B. A stream must
+    hold B back while A's transaction is open, then deliver A and B, in commit-safe order."""
+    cursor, _ = await events._start(core_engine, seed.clinic_a, None)
+    slow = db_engine.connect()
+    slow_tx = slow.begin()
+    as_role(slow, "wassup_owner", [seed.clinic_a])
+    a = slow.execute(
+        _INSERT,
+        {"c": seed.clinic_a, "t": "message.urgent", "k": f"t:{uuid.uuid4().hex}", "p": "{}"},
+    ).scalar_one()
+    b = _emit(db_engine, seed.clinic_a, "call.analyzed")  # higher id, commits first
+    try:
+        held = await events._fetch_after(core_engine, seed.clinic_a, cursor)
+        assert [f"{r.xact_id}-{r.id}" for r in held] == []  # B is held back, not delivered past A
+    finally:
+        slow_tx.commit()
+        slow.close()
+    rows = await events._fetch_after(core_engine, seed.clinic_a, cursor)
+    delivered = [f"{r.xact_id}-{r.id}" for r in rows]
+    assert delivered[:2] == [a, b]
+
+
+async def test_streams_are_capped_per_user(
+    core_engine: AsyncEngine, seed: Seed, viewer: None
+) -> None:
+    async with _app(core_engine) as client:
+        app = client._transport.app  # type: ignore[attr-defined]
+        held = [events.StreamSlot("uid-events-viewer") for _ in range(5)]
+        for slot in held:
+            app.state.event_streams.add(slot)
+        response = await client.get(
+            f"/v1/clinics/{seed.clinic_a}/events", headers={"Authorization": f"Bearer {VIEWER}"}
+        )
+        assert response.status_code == 429
+        held[0].active = False  # one of them ends
+        assert (await _read(client, seed.clinic_a))[-1]["event"] == "reauth"
+
+
+async def test_core_api_can_only_insert_workflow_events(db_engine: Engine, seed: Seed) -> None:
+    with db_engine.connect() as conn, conn.begin():
+        as_role(conn, "app_core", [seed.clinic_a])
+        with pytest.raises(ProgrammingError, match="row-level security"):
+            conn.execute(
+                text(
+                    "INSERT INTO outbox_events (clinic_id, event_type, dedupe_key, payload) "
+                    "VALUES (:c, 'message.urgent', 'call.workflow:forged', '{}'::jsonb)"
+                ),
+                {"c": seed.clinic_a},
+            )

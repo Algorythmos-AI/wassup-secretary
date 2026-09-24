@@ -5,9 +5,11 @@ version, and that version posts to our webhook. Each of these has gone wrong bef
 numbers were once bound to a draft version (so any dashboard edit went live on the next call), and
 a wrong webhook URL means calls happen but never reach the dashboard. This job compares the voice
 provider's live configuration with ``clinic_phone_numbers`` / ``clinic_voice_agents`` and reports,
-per number: ``ok``, ``not_found``, ``unbound``, ``wrong_agent``, ``floating_version`` (bound to
-"latest", i.e. whatever draft is newest), ``wrong_version``, ``unpublished_version`` or
-``webhook_mismatch``.
+per number: ``ok``, ``no_expected_agent`` (the clinic has no active agent for this environment,
+so its calls would be quarantined), ``not_found``, ``unbound``, ``wrong_agent``,
+``floating_version`` (bound to "latest", i.e. whatever draft is newest), ``wrong_version``,
+``unpublished_version`` or ``webhook_mismatch``. A check that covered no numbers at all is a
+failure too: an empty check must never look healthy.
 
 Numbers and agent ids are configuration, not personal data.
 """
@@ -59,7 +61,8 @@ _EXPECTED = text(
     """
     SELECT n.e164, a.agent_id, a.agent_version
     FROM clinic_phone_numbers n
-    JOIN clinic_voice_agents a ON a.clinic_id = n.clinic_id AND a.active AND a.environment = :env
+    LEFT JOIN clinic_voice_agents a
+      ON a.clinic_id = n.clinic_id AND a.active AND a.environment = :env
     WHERE n.active
     ORDER BY n.e164
     """
@@ -75,7 +78,9 @@ async def expected_bindings(engine: AsyncEngine, environment: str) -> list[Expec
         rows = (await conn.execute(_EXPECTED, {"env": environment})).all()
     by_number: dict[str, dict[str, int | None]] = {}
     for row in rows:
-        by_number.setdefault(row.e164, {})[row.agent_id] = row.agent_version
+        agents = by_number.setdefault(row.e164, {})
+        if row.agent_id is not None:
+            agents[row.agent_id] = row.agent_version
     return [Expected(e164, agents) for e164, agents in by_number.items()]
 
 
@@ -128,6 +133,8 @@ def assess_number(
     webhook_url: str,
 ) -> str:
     """The first problem found for one number, or 'ok'."""
+    if not expected.agents:
+        return "no_expected_agent"
     if number is None:
         return "not_found"
     bound = bound_agents(number)
@@ -156,7 +163,8 @@ async def check(api: VoiceConfigApi, expected: list[Expected], webhook_url: str)
     states = {e.e164: assess_number(e, numbers[e.e164], versions, webhook_url) for e in expected}
     failing = {n: s for n, s in states.items() if s != "ok"}
     return {
-        "status": "failing" if failing else "ok",
+        "status": "failing" if failing or not states else "ok",
+        **({"reason": "no_numbers_checked"} if not states else {}),
         "numbers": states,
         "checked": len(states),
         "webhook_checked": bool(webhook_url),
@@ -170,7 +178,9 @@ async def tick(
     report = await check(api, expected, monitor.webhook_url)
     alert_due, recovered = monitor.watch.record(report)
     if report["status"] == "failing":
-        problems = {n: s for n, s in report["numbers"].items() if s != "ok"}
+        problems = {n: s for n, s in report["numbers"].items() if s != "ok"} or {
+            "(none)": "no_numbers_checked"
+        }
         log.error("voice_config_drift", count=len(problems))
         if alert_due:
             await _alert(email, monitor.ops_emails, problems)

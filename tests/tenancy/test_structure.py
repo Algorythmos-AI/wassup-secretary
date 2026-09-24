@@ -23,7 +23,12 @@ APP_ROLES = (
 # The only tables the resolver role may read, and only through FOR SELECT policies.
 RESOLVER_READABLE = {"clinics", "clinic_voice_agents", "clinic_phone_numbers", "clinic_memberships"}
 # Every SECURITY DEFINER function must be listed here after review.
-DEFINER_ALLOWLIST = {"resolve_clinic_for_call", "staff_clinic_ids", "active_clinic_ids"}
+DEFINER_ALLOWLIST = {
+    "resolve_clinic_for_call",
+    "staff_clinic_ids",
+    "staff_memberships",
+    "active_clinic_ids",
+}
 # Tables with clinic_id that are deliberately NOT under RLS (access limited by grants instead).
 NON_RLS_WITH_CLINIC = {"retell_events_raw"}
 

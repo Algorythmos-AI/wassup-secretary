@@ -123,6 +123,8 @@ def test_resolvers_are_granted_to_exactly_one_role(
         ("app_core", "SELECT count(*) FROM tool_invocations"),
         ("app_voice", "SELECT count(*) FROM call_interactions"),
         ("app_voice", "SELECT count(*) FROM staff_users"),
+        ("app_core", "SELECT count(*) FROM staff_users"),
+        ("app_ops", "SELECT count(*) FROM staff_users"),
         ("app_voice", "SELECT count(*) FROM audit_log"),
         ("app_voice", "SELECT source_pms_id FROM patients"),
         ("app_ops", "SELECT count(*) FROM patients"),

@@ -897,16 +897,20 @@ name = "wassup-ops-worker"
 version = "0.1.0"
 source = { editable = "services/ops-worker" }
 dependencies = [
+    { name = "alembic" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "uvicorn", extra = ["standard"] },
     { name = "wassup-core" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.13" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "wassup-core", editable = "libs/wassup_core" },
 ]

@@ -8,6 +8,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY libs ./libs
 COPY services ./services
+COPY db ./db
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package "wassup-${SERVICE}"
 

@@ -42,13 +42,12 @@ Web dashboard (React) — staging and production are separate projects
 | `tests/tenancy` | isolation and catalog-structure tests (run as the real roles) |
 | `docs/adr` | decisions |
 
-## Delivery status
+## Delivery status (25 Sep 2026)
 | Phase | Scope | State |
 |---|---|---|
-| 1 | Repo, CI, workspace, service skeletons | done |
-| 2 | Database roles, tenancy schema, isolation tests | done |
-| 2 | Tenancy-aware DB access layer (`wassup_core.db`) | in progress |
-| 3 | ops-worker jobs (canary, reconciliation, monitors) | next |
-| 4 | voice-gateway ingestion and tools, parity, per-clinic cutover | planned |
-| 5 | core-api and dashboard | planned |
-| 6 | Legacy decommission, compliance pack | planned |
+| 1 | Repo, CI, rulesets, workspace, service skeletons | done |
+| 2 | Database roles, tenancy schema, isolation tests, tenancy-aware DB layer | done |
+| 3 | ops-worker: outbox + urgent alerts, line-check canary, ingestion-gap check, monitor endpoints | done (canary awaits outbound telephony) |
+| 4 | voice-gateway: signed ingestion, idempotent tools with budgets | done — per-clinic cutover pending infrastructure |
+| 5 | core-api: staff auth, calls API, workflow | done (API); dashboard UI still served by the legacy app |
+| 6 | Staging/production infrastructure, clinic cutover, legacy import, decommission | owner actions — see `docs/runbooks/go-live.md` |

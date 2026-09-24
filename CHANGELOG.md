@@ -34,6 +34,14 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
   - Returns totals (calls, average and total duration, cost, priority, reception action), workflow counts, zero-filled daily, hourly and weekday series, sentiment and the top intents.
   - The range defaults to the last 30 clinic days and is capped at 400; viewer role and above.
   - Counts only, so nothing personal is read.
+- Live dashboard events, `GET /v1/clinics/{id}/events` (Server-Sent Events):
+  - **What it sends:** the clinic's outbox events, ids only.
+  - **Access:** membership is re-checked every 5 minutes; a removed member's stream ends with `revoked`.
+  - **Lifetime:** the stream ends with `reauth` when the sign-in token expires.
+  - **Resume:** `Last-Event-ID` resumes a stream; a reconnect that is too far behind gets `reset`.
+  - **Cost:** no database connection is held between polls.
+  - **Workflow changes:** a status change now emits a `call.workflow` event, so every screen updates. Migration `0007`.
+  - **Verified live** through uvicorn: about 70 ms from insert to delivery.
 - Railway config-as-code per service (`deploy/railway/*.json`):
   - Dockerfile build, watch paths, `/health` check, restart policy and replicas.
   - Draining longer than uvicorn's 30 s graceful shutdown.

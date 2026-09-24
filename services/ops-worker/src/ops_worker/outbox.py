@@ -150,6 +150,7 @@ HANDLERS: dict[str, Handler] = {
     "message.urgent": deliver_urgent_message,
     "message.captured": _noop,
     "call.analyzed": _noop,
+    "call.workflow": _noop,  # consumed by core-api's live event streams
 }
 
 

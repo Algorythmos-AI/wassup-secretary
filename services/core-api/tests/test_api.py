@@ -191,6 +191,18 @@ async def test_workflow_update_is_idempotent_and_optimistically_locked(
             text("SELECT count(*) FROM call_interactions WHERE call_id = :id"), {"id": call_id}
         ).scalar()
     assert interactions == 1
+    with db_engine.connect() as conn:
+        live = (
+            conn.execute(
+                text(
+                    "SELECT payload FROM outbox_events WHERE event_type = 'call.workflow' AND payload->>'call_id' = :id"
+                ),
+                {"id": str(call_id)},
+            )
+            .scalars()
+            .all()
+        )
+    assert live == [{"call_id": str(call_id), "version": 2}]  # other screens hear about it once
 
 
 async def test_viewer_cannot_change_workflow(

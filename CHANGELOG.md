@@ -34,6 +34,11 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
   - Returns totals (calls, average and total duration, cost, priority, reception action), workflow counts, zero-filled daily, hourly and weekday series, sentiment and the top intents.
   - The range defaults to the last 30 clinic days and is capped at 400; viewer role and above.
   - Counts only, so nothing personal is read.
+- Railway config-as-code per service (`deploy/railway/*.json`):
+  - Dockerfile build, watch paths, `/health` check, restart policy and replicas.
+  - Draining longer than uvicorn's 30 s graceful shutdown.
+  - Migrations as ops-worker's pre-deploy step.
+  - Validated against Railway's published schema in CI.
 - Operator CLI `wassup` (`tools/wassup-cli`), the cutover and rollback tool:
   - `voice bindings` flags floating or unpublished bindings.
   - `voice export` backs up numbers plus bound agent and LLM versions as owner-only files.

@@ -31,6 +31,18 @@ environment settings.
 
 ## 2. Services (one per image; same image in staging and production)
 
+Each service's build and deploy settings are code, in `deploy/railway/<service>.json`, and CI
+validates them against Railway's schema. For each of the three services, set the following in the
+Railway service settings:
+- **Source:** this repository, branch `integration` for staging and `main` for production.
+- **Config file path:** `/deploy/railway/<service>.json`. This supplies the Dockerfile, the watch
+  paths, the `/health` check, the restart policy, the replicas, 35 s of draining, and for
+  ops-worker the migration pre-deploy step.
+- **Variable `SERVICE=<service>`:** Railway passes it to the Dockerfile's `ARG SERVICE`, which
+  selects the package and the start module.
+- **Private networking on**, and no public domain for ops-worker unless monitors need its
+  `/health/*` endpoints. Those endpoints expose counts only.
+
 | Service | Image | Start | Pre-deploy | Key environment |
 |---|---|---|---|---|
 | voice-gateway | `wassup-secretary-voice-gateway` | default CMD | — | `WASSUP_DATABASE_URL` (app_voice), `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_ENVIRONMENT` |

@@ -11,7 +11,10 @@ Safety rules (the rebind is how a clinic is cut over, and how a cutover is rolle
   (a draft binding means any edit in the provider's dashboard goes live on the next call).
 - After writing, the number is read back and must show exactly the new binding.
 - Every applied rebind appends the previous binding to ``<state-dir>/<number>.jsonl``, so
-  ``rollback`` needs no memory of what was there before.
+  ``rollback`` needs no memory of what was there before. Each rollback undoes exactly one earlier
+  rebind (rolling back twice steps back twice), and refuses if the number is no longer on the
+  binding it would be undoing — someone else changed it since — unless ``--force`` is given.
+  Keep ``--state-dir`` on storage your team shares if more than one person rebinds numbers.
 - The API key comes only from ``RETELL_API_KEY`` and is never printed.
 - Exports contain prompts (trade secrets): files are written owner-read-only, into a directory
   you choose; never commit them.
@@ -98,6 +101,7 @@ def _rebind(
     state_dir: Path,
     out: TextIO,
     reason: str,
+    undoes: int | None = None,
 ) -> None:
     number = api.get_phone_number(e164)
     if number is None:
@@ -116,13 +120,15 @@ def _rebind(
         out.write("  dry run: add --apply to make this change\n")
         return
     state_dir.mkdir(parents=True, exist_ok=True)
-    record = {
+    record: dict[str, Any] = {
         "at": datetime.now(UTC).isoformat(),
         "number": e164,
         "previous": [{"agent_id": a, "agent_version": v, "weight": w} for a, v, w in current],
         "new": {"agent_id": agent_id, "agent_version": version},
         "reason": reason,
     }
+    if undoes is not None:
+        record["undoes"] = undoes
     with _state_file(state_dir, e164).open("a") as log:  # written before the change
         log.write(json.dumps(record) + "\n")
     api.bind_number(e164, agent_id, version)
@@ -135,16 +141,35 @@ def _rebind(
     out.write(f"  applied and verified. Roll back with: wassup voice rollback {e164} --apply\n")
 
 
-def cmd_rollback(api: Retell, e164: str, *, apply: bool, state_dir: Path, out: TextIO) -> None:
-    path = _state_file(state_dir, e164)
+def _records(path: Path) -> list[dict[str, Any]]:
     lines = path.read_text().splitlines() if path.exists() else []
-    if not lines:
-        raise CliError(f"no rebind of {e164} recorded in {state_dir}")
-    previous = json.loads(lines[-1])["previous"]
+    return [json.loads(line) for line in lines if line.strip()]
+
+
+def cmd_rollback(
+    api: Retell, e164: str, *, apply: bool, force: bool, state_dir: Path, out: TextIO
+) -> None:
+    records = _records(_state_file(state_dir, e164))
+    undone = {r["undoes"] for r in records if "undoes" in r}
+    candidates = [
+        i for i, r in enumerate(records) if r.get("reason") != "rollback" and i not in undone
+    ]
+    if not candidates:
+        raise CliError(f"no rebind of {e164} left to roll back in {state_dir}")
+    index = candidates[-1]
+    record = records[index]
+    previous = record["previous"]
     if len(previous) != 1 or previous[0].get("agent_version") is None:
         raise CliError(
             f"the previous binding of {e164} was {previous}: not a single published version, "
             "so it can't be restored automatically; rebind explicitly"
+        )
+    number = api.get_phone_number(e164)
+    expected = [(record["new"]["agent_id"], record["new"]["agent_version"], 1.0)]
+    if number is not None and binding(number) != expected and not force:
+        raise CliError(
+            f"{e164} is on {_describe(binding(number))}, not {_describe(expected)} as recorded "
+            f"by the rebind being undone: someone changed it since. Check, then use --force"
         )
     _rebind(
         api,
@@ -155,6 +180,7 @@ def cmd_rollback(api: Retell, e164: str, *, apply: bool, state_dir: Path, out: T
         state_dir=state_dir,
         out=out,
         reason="rollback",
+        undoes=index,
     )
 
 
@@ -171,6 +197,12 @@ def _parser() -> argparse.ArgumentParser:
         cmd.add_argument("number", help="E.164, e.g. +61238211140")
         cmd.add_argument("--apply", action="store_true", help="make the change (default: dry run)")
         cmd.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
+        if name == "rollback":
+            cmd.add_argument(
+                "--force",
+                action="store_true",
+                help="roll back even if the number was changed since the recorded rebind",
+            )
         if name == "rebind":
             cmd.add_argument("--agent", required=True)
             cmd.add_argument("--version", type=int, required=True)
@@ -199,7 +231,14 @@ def _dispatch(args: argparse.Namespace, api: Retell, out: TextIO) -> None:
             reason=args.reason,
         )
     else:
-        cmd_rollback(api, args.number, apply=args.apply, state_dir=args.state_dir, out=out)
+        cmd_rollback(
+            api,
+            args.number,
+            apply=args.apply,
+            force=args.force,
+            state_dir=args.state_dir,
+            out=out,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

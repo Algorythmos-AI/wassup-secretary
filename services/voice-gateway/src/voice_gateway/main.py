@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
-from wassup_core.app import create_app
+from wassup_core.app import create_app, schema_readiness
 from wassup_core.db import make_engine
 
 from voice_gateway.settings import VoiceGatewaySettings
@@ -18,6 +18,9 @@ from voice_gateway.webhook import router as webhook_router
 # max 154 KB (Sept 2026). Limits leave >30x headroom so a long call is never dropped.
 WEBHOOK_BODY_LIMIT = 5 * 1024 * 1024
 TOOL_BODY_LIMIT = 2 * 1024 * 1024
+# The newest schema object this service's code relies on (migration 0005). Bump it together with
+# the migration that adds something voice-gateway needs: /health stays 503 until it exists.
+SCHEMA_PROBE = "SELECT has_table_privilege('tool_requests_raw', 'INSERT')"
 
 
 def build_app(
@@ -28,6 +31,7 @@ def build_app(
         settings,
         [webhook_router, tools_router],
         body_limits={"/v1/retell/webhook": WEBHOOK_BODY_LIMIT, "/v1/retell/tools": TOOL_BODY_LIMIT},
+        readiness=schema_readiness(SCHEMA_PROBE),
     )
     app.state.engine = engine
 

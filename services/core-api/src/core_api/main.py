@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncEngine
-from wassup_core.app import create_app
+from wassup_core.app import create_app, schema_readiness
 from wassup_core.db import make_engine
 
 from core_api.analytics import router as analytics_router
@@ -17,6 +18,10 @@ from core_api.events import router as events_router
 from core_api.routes import router
 from core_api.settings import CoreApiSettings
 
+# The newest schema object this service's code relies on (migration 0008). Bump it together with
+# the migration that adds something core-api needs: /health stays 503 until it exists.
+SCHEMA_PROBE = "SELECT has_column_privilege('outbox_events', 'xact_id', 'SELECT')"
+
 
 def build_app(
     settings: CoreApiSettings | None = None,
@@ -24,8 +29,13 @@ def build_app(
     verifier: TokenVerifier | None = None,
 ) -> FastAPI:
     settings = settings or CoreApiSettings()
-    app = create_app(settings, [router, analytics_router, events_router])
+    app = create_app(
+        settings,
+        [router, analytics_router, events_router],
+        readiness=schema_readiness(SCHEMA_PROBE),
+    )
     app.state.engine = engine
+    app.state.event_streams = weakref.WeakSet()  # open live-event streams (see events.py)
     if verifier is None and (settings.auth_mode == "test" or settings.firebase_project_id):
         verifier = build_verifier(settings)  # raises if test auth is used outside local/test
     app.state.verifier = verifier  # None → every protected route answers 503, never "open"

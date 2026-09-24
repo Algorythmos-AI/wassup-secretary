@@ -33,6 +33,7 @@ log = get_logger(__name__)
 
 API = "https://api.twilio.com/2010-04-01"
 REALERT_EVERY_S = 6 * 3600
+PRIVATE_FIELDS = frozenset({"balance", "currency"})
 # The endpoint reports 'failing' when the last successful check is older than this.
 STALE_AFTER_S = 3600
 
@@ -113,7 +114,10 @@ class TelephonyMonitor:
     watch: Watch = field(default_factory=lambda: Watch(STALE_AFTER_S, REALERT_EVERY_S))
 
     def report(self, now: float | None = None) -> dict[str, Any]:
-        return self.watch.report(now)
+        """For the unauthenticated health endpoint: states and problem codes, not the balance
+        (the alert email to ops carries the full detail)."""
+        full = self.watch.report(now)
+        return {k: v for k, v in full.items() if k not in PRIVATE_FIELDS}
 
 
 async def check(api: TelephonyApi, config: TelephonyConfig) -> dict[str, Any]:
@@ -153,8 +157,10 @@ async def tick(monitor: TelephonyMonitor, api: TelephonyApi, email: EmailSender)
     try:
         report = await check(api, monitor.config)
     except TelephonyUnavailable as exc:
+        # Nothing learnt: fail the job so its external heartbeat is NOT pinged (a check that
+        # can't reach the provider for hours must page someone), and the report goes stale.
         log.warning("telephony_check_unavailable", reason=str(exc))
-        return "unknown"
+        raise
     alert_due, recovered = monitor.watch.record(report)
     status = str(report["status"])
     if status == "failing":

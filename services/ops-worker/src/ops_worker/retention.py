@@ -2,8 +2,9 @@
 
 Raw payloads duplicate what the call records already hold (transcripts, messages); keeping them
 longer than needed is a privacy cost with no benefit. Unfinished rows (waiting for replay, or for
-an operator's decision) are never deleted. Deletes run in small batches so no long lock is held
-on tables the phone path writes to.
+an operator's decision) are never deleted — in particular a quarantined call is kept until someone
+resolves it, because it never became a call record and its payload is the only copy. Deletes
+run in small batches so no long lock is held on tables the phone path writes to.
 """
 
 from __future__ import annotations
@@ -21,13 +22,12 @@ BATCH = 1000
 MAX_BATCHES_PER_RUN = 50
 
 _RULES = {
-    # finished: processed, or quarantined (a configuration problem, investigated from the alert)
+    # finished = processed (a quarantined event stays until an operator replays or abandons it)
     "retell_events_raw": text(
         """
         DELETE FROM retell_events_raw WHERE id IN (
           SELECT id FROM retell_events_raw
-          WHERE received_at < now() - make_interval(days => :days)
-            AND (processed_at IS NOT NULL OR error LIKE 'quarantined:%')
+          WHERE received_at < now() - make_interval(days => :days) AND processed_at IS NOT NULL
           LIMIT :n)
         """
     ),
@@ -43,7 +43,7 @@ _RULES = {
         """
         DELETE FROM quarantine_events WHERE id IN (
           SELECT id FROM quarantine_events
-          WHERE received_at < now() - make_interval(days => :days)
+          WHERE received_at < now() - make_interval(days => :days) AND resolved_at IS NOT NULL
           LIMIT :n)
         """
     ),

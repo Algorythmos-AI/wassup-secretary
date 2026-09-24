@@ -153,19 +153,23 @@ def test_objects_are_owned_by_the_owner_role(db_engine: Engine) -> None:
 
 
 def test_non_isolation_policies_are_resolver_read_only(db_engine: Engine) -> None:
-    """Every policy is either the clinic-isolation policy, or a FOR SELECT policy for the
-    resolver role on a routing table. Nothing else may open a table up."""
+    """Every permissive policy is either the clinic-isolation policy, or a FOR SELECT policy for
+    the resolver role on a routing table. Nothing else may open a table up (restrictive policies
+    may only narrow access, so they are always allowed)."""
     with db_engine.connect() as conn:
         rows = conn.execute(
             text(
                 """
-                SELECT tablename, policyname, cmd, roles FROM pg_policies WHERE schemaname = 'public'
+                SELECT tablename, policyname, cmd, roles, permissive FROM pg_policies
+                WHERE schemaname = 'public'
                 """
             )
         ).all()
     unexpected = []
     for r in rows:
         if r.policyname == f"{r.tablename}_clinic_isolation":
+            continue
+        if r.permissive == "RESTRICTIVE":  # can only narrow what other policies allow
             continue
         if (
             r.cmd == "SELECT"

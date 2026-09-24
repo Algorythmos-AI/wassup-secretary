@@ -34,6 +34,21 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
   - Returns totals (calls, average and total duration, cost, priority, reception action), workflow counts, zero-filled daily, hourly and weekday series, sentiment and the top intents.
   - The range defaults to the last 30 clinic days and is capped at 400; viewer role and above.
   - Counts only, so nothing personal is read.
+- Second review's fixes:
+  - **Live streams can't skip events.** Events are delivered in (transaction, id) order, and only from transactions older than every running one. Cursor format is `<xact>-<id>`.
+  - **Stream limits:** 5 per person and 200 per replica; a poll interrupted by a disconnect is shielded so it finishes cleanly.
+  - **core-api outbox inserts** are restricted to `call.workflow` by a RESTRICTIVE policy.
+  - **Readiness gating:** `/health` answers 503 `not_ready` until the schema a service needs exists, so a deploy can't go live before its migration.
+  - **CLI rollback** steps back one rebind at a time and refuses to undo someone else's later change (`--force` to override).
+  - **Voice-config drift** reports `no_expected_agent`, and an empty check fails.
+  - **Quarantine:** quarantined calls are kept until resolved; a new quarantine monitor emails ops and serves `/health/quarantine`, with a runbook.
+  - **Smaller fixes:**
+    - analytics returns 400, not 500, for dates near year 1;
+    - the telephony job fails (no heartbeat) when it can't reach the provider;
+    - `/health/telephony` no longer shows the balance;
+    - app roles have a 30 s idle-in-transaction limit;
+    - migration rules are in AGENTS.md.
+  - Migration `0008`.
 - Live dashboard events, `GET /v1/clinics/{id}/events` (Server-Sent Events):
   - **What it sends:** the clinic's outbox events, ids only.
   - **Access:** membership is re-checked every 5 minutes; a removed member's stream ends with `revoked`.

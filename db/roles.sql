@@ -47,6 +47,11 @@ GRANT wassup_auditor TO wassup_owner;
 ALTER ROLE app_voice SET statement_timeout = '1s';
 ALTER ROLE app_core  SET statement_timeout = '5s';
 ALTER ROLE app_ops   SET statement_timeout = '60s';
+-- An abandoned open transaction would hold back live events (core-api streams only rows from
+-- transactions older than every running one) and block vacuum: end it after 30 s idle.
+ALTER ROLE app_voice SET idle_in_transaction_session_timeout = '30s';
+ALTER ROLE app_core  SET idle_in_transaction_session_timeout = '30s';
+ALTER ROLE app_ops   SET idle_in_transaction_session_timeout = '30s';
 ALTER ROLE app_voice CONNECTION LIMIT 20;
 ALTER ROLE app_core  CONNECTION LIMIT 40;
 ALTER ROLE app_ops   CONNECTION LIMIT 10;

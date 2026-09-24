@@ -84,7 +84,10 @@ _INTENTS = text(
 def _range(timezone: str, from_date: date | None, to_date: date | None) -> tuple[date, date]:
     today = datetime.now(ZoneInfo(timezone)).date()
     end = to_date or today
-    start = from_date or end - timedelta(days=DEFAULT_DAYS - 1)
+    try:
+        start = from_date or end - timedelta(days=DEFAULT_DAYS - 1)
+    except OverflowError as exc:  # e.g. ?to=0001-01-05: before the calendar starts
+        raise HTTPException(status_code=400, detail="Date out of range") from exc
     if start > end:
         raise HTTPException(status_code=400, detail="'from' must not be after 'to'")
     if (end - start).days + 1 > MAX_DAYS:

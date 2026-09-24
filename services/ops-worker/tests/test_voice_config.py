@@ -85,6 +85,16 @@ def test_assess_number(
     assert voice_config.assess_number(EXPECTED, number, versions, HOOK) == state
 
 
+def test_number_without_an_expected_agent_is_a_problem() -> None:
+    orphan = Expected(EXPECTED.e164, {})
+    assert voice_config.assess_number(orphan, _number(), VERSIONS, HOOK) == "no_expected_agent"
+
+
+async def test_checking_nothing_is_not_healthy() -> None:
+    report = await voice_config.check(FakeApi({}), [], HOOK)
+    assert (report["status"], report["reason"]) == ("failing", "no_numbers_checked")
+
+
 def test_unpinned_agent_only_needs_a_published_version() -> None:
     unpinned = Expected(EXPECTED.e164, {"agent_test_a": None})
     assert voice_config.assess_number(unpinned, _number(version=2), VERSIONS, HOOK) == "ok"
@@ -162,6 +172,22 @@ async def test_tick_reads_expected_bindings_and_alerts_on_drift(
     assert "+61400000102: unpublished_version" in body and "+61400000101" not in body
     await voice_config.tick(monitor, ops_engine, FakeApi(healthy), sender)
     assert len(sender.sent) == 1  # not re-sent every run
+
+    # Deactivating a clinic's agent must not make its number silently disappear from the check.
+    with db_engine.connect() as conn, conn.begin():
+        as_role(conn, "wassup_owner", [seed.clinic_b])
+        conn.execute(
+            text("UPDATE clinic_voice_agents SET active = false WHERE agent_id = 'agent_test_b'")
+        )
+    try:
+        await voice_config.tick(monitor, ops_engine, FakeApi(healthy), sender)
+        assert monitor.report()["numbers"]["+61400000102"] == "no_expected_agent"
+    finally:
+        with db_engine.connect() as conn, conn.begin():
+            as_role(conn, "wassup_owner", [seed.clinic_b])
+            conn.execute(
+                text("UPDATE clinic_voice_agents SET active = true WHERE agent_id = 'agent_test_b'")
+            )
 
 
 async def test_health_endpoint() -> None:

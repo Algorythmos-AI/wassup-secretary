@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.app import create_app
 from wassup_core.db import make_engine
 
-from ops_worker import canary, replay, retention, telephony, voice_config
+from ops_worker import canary, quarantine, replay, retention, telephony, voice_config
 from ops_worker.health_routes import install_probes
 from ops_worker.health_routes import router as health_router
 from ops_worker.notifier import EmailSender, NotConfiguredSender, ResendEmailSender
@@ -67,8 +67,14 @@ def _scheduled_jobs(
     async def retention_job() -> dict[str, int]:
         return await retention.run(eng, timedelta(days=settings.raw_retention_days))
 
+    live_quarantine: quarantine.QuarantineMonitor = app.state.quarantine
+
+    async def quarantine_job() -> str:
+        return await quarantine.tick(live_quarantine, eng, sender)
+
     jobs: list[Job] = [
         ("outbox", settings.outbox_interval_s, outbox_job, settings.outbox_heartbeat_url),
+        ("quarantine", 300.0, quarantine_job, settings.quarantine_heartbeat_url),
         (
             "retention",
             settings.retention_interval_s,
@@ -158,6 +164,7 @@ def build_app(
         retell = RetellClient(settings.retell_api_key.get_secret_value())
     app.state.retell = retell
     install_probes(app.state)
+    app.state.quarantine = quarantine.QuarantineMonitor(settings.ops_emails)
     app.state.voice_config = (
         voice_config.VoiceConfigMonitor(
             environment="production" if settings.is_production else "staging",

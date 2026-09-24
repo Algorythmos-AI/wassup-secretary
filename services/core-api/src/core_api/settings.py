@@ -20,6 +20,8 @@ class CoreApiSettings(BaseServiceSettings):
     # also ends when the viewer's sign-in token expires; the client reconnects with a fresh one).
     events_poll_interval_s: float = 2.0
     events_max_seconds: float = 3600.0
+    events_max_per_user: int = 5
+    events_max_streams: int = 200
 
     @property
     def allowed_origins(self) -> list[str]:

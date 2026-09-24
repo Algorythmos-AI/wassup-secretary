@@ -133,3 +133,11 @@ async def voice_config_health(request: Request) -> JSONResponse:
         return JSONResponse({"status": "unconfigured"}, status_code=503)
     report = monitor.report()
     return _respond(report, report["status"] != "ok")
+
+
+@router.get("/health/quarantine", include_in_schema=False)
+async def quarantine_health(request: Request) -> JSONResponse:
+    """Latest quarantine check, from memory: 503 while any quarantined item is unresolved (a
+    quarantined call is on no dashboard), or when the check is stale or never ran."""
+    report = request.app.state.quarantine.report()
+    return _respond(report, report["status"] != "ok")

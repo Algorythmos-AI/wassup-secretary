@@ -56,6 +56,9 @@ class OpsWorkerSettings(BaseServiceSettings):
     voice_config_interval_s: float = 900.0
     voice_config_heartbeat_url: str = ""
     quarantine_heartbeat_url: str = ""
+    # Daily usage rollup (calls, minutes, provider cost per clinic per local day).
+    usage_interval_s: float = 3600.0
+    usage_heartbeat_url: str = ""
     # Raw provider payloads (verbatim caller content) are deleted this long after they are finished.
     raw_retention_days: int = 90
     retention_interval_s: float = 6 * 3600

@@ -174,3 +174,45 @@ async def test_other_clinics_are_not_found(
     client: httpx.AsyncClient, clinic: uuid.UUID, seed: Seed
 ) -> None:
     assert (await _get(client, seed.clinic_a)).status_code == 404
+
+
+async def test_usage_is_for_admins_only_and_totals_add_up(
+    client: httpx.AsyncClient, db_engine: Engine, clinic: uuid.UUID
+) -> None:
+    with db_engine.connect() as conn, conn.begin():
+        as_role(conn, "wassup_owner", [clinic])
+        conn.execute(
+            text(
+                "INSERT INTO usage_daily (clinic_id, day, calls, minutes, provider_cost_usd) VALUES "
+                "(:c, '2026-09-01', 2, 3.00, 0.3000), (:c, '2026-09-03', 1, 0.50, 0.0525) "
+                "ON CONFLICT DO NOTHING"
+            ),
+            {"c": clinic},
+        )
+    url = f"/v1/clinics/{clinic}/usage"
+    params = {"from": "2026-09-01", "to": "2026-09-07"}
+    viewer = await client.get(url, params=params, headers={"Authorization": f"Bearer {ANALYST}"})
+    assert viewer.status_code == 403  # billing data: admins and owners only
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(
+            text(
+                "UPDATE clinic_memberships SET role = 'admin' WHERE clinic_id = :c AND staff_user_id = "
+                "(SELECT id FROM staff_users WHERE firebase_uid = 'uid-analyst')"
+            ),
+            {"c": clinic},
+        )
+    try:
+        body = (
+            await client.get(url, params=params, headers={"Authorization": f"Bearer {ANALYST}"})
+        ).json()
+    finally:
+        with db_engine.connect() as conn, conn.begin():
+            conn.execute(
+                text(
+                    "UPDATE clinic_memberships SET role = 'viewer' WHERE clinic_id = :c AND staff_user_id = "
+                    "(SELECT id FROM staff_users WHERE firebase_uid = 'uid-analyst')"
+                ),
+                {"c": clinic},
+            )
+    assert [d["date"] for d in body["days"]] == ["2026-09-01", "2026-09-03"]
+    assert body["totals"] == {"calls": 3, "minutes": "3.50", "provider_cost_usd": "0.3525"}

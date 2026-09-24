@@ -146,3 +146,53 @@ async def summary(
         "sentiment": sentiment,
         "top_intents": intents,
     }
+
+
+_USAGE = text(
+    """
+    SELECT day, calls, minutes, provider_cost_usd FROM usage_daily
+    WHERE clinic_id = :c AND day BETWEEN :from_date AND :to_date ORDER BY day
+    """
+)
+
+
+@router.get("/clinics/{clinic_id}/usage")
+async def usage(
+    clinic_id: uuid.UUID,
+    staff: StaffDep,
+    request: Request,
+    from_date: Annotated[date | None, Query(alias="from")] = None,
+    to_date: Annotated[date | None, Query(alias="to")] = None,
+) -> dict[str, Any]:
+    """Billing view (admins and owners): per-day calls, minutes and voice-provider cost, rolled
+    up hourly by ops-worker. Days without calls are omitted."""
+    staff.require(clinic_id, "admin")
+    engine: AsyncEngine = request.app.state.engine
+    async with clinic_scope(engine, [clinic_id]) as conn:
+        timezone = (
+            await conn.execute(text("SELECT timezone FROM clinics WHERE id = :c"), {"c": clinic_id})
+        ).scalar_one()
+        start, end = _range(timezone, from_date, to_date)
+        rows = (
+            await conn.execute(_USAGE, {"c": clinic_id, "from_date": start, "to_date": end})
+        ).all()
+    days = [
+        {
+            "date": r.day.isoformat(),
+            "calls": r.calls,
+            "minutes": str(r.minutes),
+            "provider_cost_usd": str(r.provider_cost_usd),
+        }
+        for r in rows
+    ]
+    return {
+        "clinic_id": str(clinic_id),
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "days": days,
+        "totals": {
+            "calls": sum(r.calls for r in rows),
+            "minutes": str(sum((r.minutes for r in rows), Decimal(0))),
+            "provider_cost_usd": str(sum((r.provider_cost_usd for r in rows), Decimal(0))),
+        },
+    }

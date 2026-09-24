@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.app import create_app
 from wassup_core.db import make_engine
 
-from ops_worker import canary, quarantine, replay, retention, telephony, voice_config
+from ops_worker import canary, quarantine, replay, retention, telephony, usage, voice_config
 from ops_worker.health_routes import install_probes
 from ops_worker.health_routes import router as health_router
 from ops_worker.notifier import EmailSender, NotConfiguredSender, ResendEmailSender
@@ -72,8 +72,12 @@ def _scheduled_jobs(
     async def quarantine_job() -> str:
         return await quarantine.tick(live_quarantine, eng, sender)
 
+    async def usage_job() -> int:
+        return await usage.run(eng)
+
     jobs: list[Job] = [
         ("outbox", settings.outbox_interval_s, outbox_job, settings.outbox_heartbeat_url),
+        ("usage", settings.usage_interval_s, usage_job, settings.usage_heartbeat_url),
         ("quarantine", 300.0, quarantine_job, settings.quarantine_heartbeat_url),
         (
             "retention",

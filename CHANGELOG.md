@@ -34,6 +34,9 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
   - Returns totals (calls, average and total duration, cost, priority, reception action), workflow counts, zero-filled daily, hourly and weekday series, sentiment and the top intents.
   - The range defaults to the last 30 clinic days and is capped at 400; viewer role and above.
   - Counts only, so nothing personal is read.
+- Usage rollup:
+  - ops-worker recomputes calls, minutes and voice-provider cost per clinic per local day every hour, over the last 4 days. It is idempotent and absorbs late analysis.
+  - New endpoint `GET /v1/clinics/{id}/usage?from&to` for admins and owners (billing input).
 - Second review's fixes:
   - **Live streams can't skip events.** Events are delivered in (transaction, id) order, and only from transactions older than every running one. Cursor format is `<xact>-<id>`.
   - **Stream limits:** 5 per person and 200 per replica; a poll interrupted by a disconnect is shielded so it finishes cleanly.

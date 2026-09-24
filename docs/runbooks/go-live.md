@@ -61,10 +61,18 @@ Then add staff: a `staff_users` row keyed by their Firebase uid, plus `clinic_me
    - webhook: `https://<voice-gateway>/v1/retell/webhook`
    - each tool: `https://<voice-gateway>/v1/retell/tools/<clinic-slug>/<tool>`, with `timeout_ms` about 3000 and `max_retry` 0.
    - the prompt must follow the [voice tool contract](../voice-tools.md): `ok: false` means **not saved**, and the agent must say so.
-2. **Publish** the draft, then **rebind the number** to the new published version (see `retell_agents` binding notes in the legacy repo).
+2. **Publish** the draft, then **rebind the number** to the new published version with the operator CLI:
+   ```bash
+   export RETELL_API_KEY=...            # from the platform's secret store; never in files
+   uv run wassup voice export --out ~/wassup-backup/$(date +%F)   # backup first (private files)
+   uv run wassup voice rebind +61XXXXXXXXX --agent agent_… --version N            # dry run
+   uv run wassup voice rebind +61XXXXXXXXX --agent agent_… --version N --apply    # verified
+   ```
+   The CLI refuses drafts and "latest", re-reads the number to verify, and records the previous
+   binding locally.
 3. **Record the binding.** Set `clinic_voice_agents.agent_version` to the published version you bound. `/health/voice-config` then pages if anyone rebinds the number, edits it onto a draft, or changes the webhook.
 4. **Test call.** The call must appear in `calls` with the right `clinic_id`, and `/health/freshness` on ops-worker must say `ok`.
-5. **Rollback:** rebind the number to the previous published version, which takes seconds, and update `agent_version` to match.
+5. **Rollback** takes seconds: `uv run wassup voice rollback +61XXXXXXXXX --apply` restores the recorded previous binding. Then update `agent_version` to match.
 
 ## 5. Monitors (Better Stack)
 - HTTP monitors on each service's `/health`.

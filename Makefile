@@ -13,7 +13,7 @@ fmt:
 	uv run ruff check . --fix
 
 typecheck:
-	uv run mypy libs/wassup_core/src services/*/src
+	uv run mypy libs/wassup_core/src services/*/src tools/*/src
 
 # Unit tests only: no database needed.
 test-fast:

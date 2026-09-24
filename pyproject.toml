@@ -5,6 +5,7 @@ members = [
   "services/voice-gateway",
   "services/core-api",
   "services/ops-worker",
+  "tools/wassup-cli",
 ]
 
 [dependency-groups]
@@ -29,7 +30,7 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF", "SIM", "PL"]
 ignore = ["PLR0913", "PLR2004"]
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["S101", "S105", "S106", "PLR2004"]
+"**/tests/**" = ["S101", "S105", "S106", "PLR2004", "PLR0911"]
 # SQL is kept verbatim and readable in migrations and DB tests; don't wrap it for line length.
 "db/migrations/**" = ["E501"]
 "services/*/src/*/store.py" = ["E501"]

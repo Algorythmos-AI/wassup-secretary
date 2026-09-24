@@ -26,5 +26,6 @@ WORKDIR /app
 COPY --from=build --chown=app:app /app /app
 USER app
 EXPOSE 8080
-# 30 s graceful shutdown so in-flight voice tool calls finish during a deploy.
-CMD ["sh", "-c", "exec uvicorn $(echo ${SERVICE_MODULE} | tr - _).main:app --host 0.0.0.0 --port ${PORT:-8080} --timeout-graceful-shutdown 30 --no-server-header"]
+# 30 s graceful shutdown so in-flight voice tool calls finish during a deploy. uvicorn's own
+# access log is off: our structured request log never records query strings.
+CMD ["sh", "-c", "exec uvicorn $(echo ${SERVICE_MODULE} | tr - _).main:app --host 0.0.0.0 --port ${PORT:-8080} --timeout-graceful-shutdown 30 --no-server-header --no-access-log"]

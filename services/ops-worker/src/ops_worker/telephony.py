@@ -19,7 +19,6 @@ nothing from the response is ever logged or stored.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
@@ -28,6 +27,7 @@ import httpx
 from wassup_core.logging import get_logger
 
 from ops_worker.notifier import EmailSender
+from ops_worker.watch import Watch
 
 log = get_logger(__name__)
 
@@ -110,18 +110,10 @@ class TelephonyMonitor:
     """Holds the latest result between the scheduled job and the health endpoint."""
 
     config: TelephonyConfig
-    latest: dict[str, Any] | None = None
-    last_success: float | None = None
-    _alerted_status: str | None = field(default=None, repr=False)
-    _alerted_at: float = field(default=0.0, repr=False)
+    watch: Watch = field(default_factory=lambda: Watch(STALE_AFTER_S, REALERT_EVERY_S))
 
     def report(self, now: float | None = None) -> dict[str, Any]:
-        now = time.time() if now is None else now
-        if self.latest is None or self.last_success is None:
-            return {"status": "failing", "reason": "never_checked"}
-        if now - self.last_success > STALE_AFTER_S:
-            return {**self.latest, "status": "failing", "reason": "stale"}
-        return self.latest
+        return self.watch.report(now)
 
 
 async def check(api: TelephonyApi, config: TelephonyConfig) -> dict[str, Any]:
@@ -163,22 +155,18 @@ async def tick(monitor: TelephonyMonitor, api: TelephonyApi, email: EmailSender)
     except TelephonyUnavailable as exc:
         log.warning("telephony_check_unavailable", reason=str(exc))
         return "unknown"
-    now = time.time()
-    monitor.latest, monitor.last_success = report, now
-    status = report["status"]
+    alert_due, recovered = monitor.watch.record(report)
+    status = str(report["status"])
     if status == "failing":
-        due = monitor._alerted_status != "failing" or now - monitor._alerted_at > REALERT_EVERY_S
-        if due:
+        if alert_due:
             await _alert(email, monitor.config.ops_emails, report)
-            monitor._alerted_at = now
         log.error(
             "telephony_failing",
             reason=",".join(report.get("problems") or [report.get("reason", "")]),
         )
-    elif monitor._alerted_status == "failing":
+    elif recovered:
         log.info("telephony_recovered")
-    monitor._alerted_status = status
-    return str(status)
+    return status
 
 
 async def _alert(email: EmailSender, ops_emails: list[str], report: dict[str, Any]) -> None:

@@ -1,9 +1,11 @@
-"""Minimal Retell REST client used by ops-worker (read calls, place line-check calls)."""
+"""Minimal Retell REST client used by ops-worker: read calls, place line-check calls, and read
+phone-number and agent-version configuration (read-only) for the drift monitor."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import quote
 
 import httpx
 
@@ -59,3 +61,31 @@ class RetellClient:
         response.raise_for_status()
         call_id = response.json().get("call_id")
         return str(call_id) if call_id else None
+
+    async def get_phone_number(self, e164: str) -> dict[str, Any] | None:
+        async with httpx.AsyncClient(base_url=BASE_URL, timeout=self.timeout_s) as client:
+            response = await client.get(
+                f"/get-phone-number/{quote(e164, safe='')}", headers=self._headers()
+            )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        body = response.json()
+        return body if isinstance(body, dict) else None
+
+    async def get_agent_version(self, agent_id: str, version: int) -> dict[str, Any] | None:
+        """One exact agent version (its published flag and webhook URL)."""
+        async with httpx.AsyncClient(base_url=BASE_URL, timeout=self.timeout_s) as client:
+            response = await client.get(
+                f"/get-agent/{quote(agent_id, safe='')}",
+                params={"version": version},
+                headers=self._headers(),
+            )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        body = response.json()
+        # Guard against a silently ignored version parameter: only the version asked for counts.
+        if not isinstance(body, dict) or body.get("version") != version:
+            return None
+        return body

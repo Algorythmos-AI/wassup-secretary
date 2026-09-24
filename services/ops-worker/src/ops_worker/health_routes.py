@@ -122,3 +122,14 @@ async def telephony_health(request: Request) -> JSONResponse:
         return JSONResponse({"status": "unconfigured"}, status_code=503)
     report = monitor.report()
     return _respond(report, report["status"] != "ok")
+
+
+@router.get("/health/voice-config", include_in_schema=False)
+async def voice_config_health(request: Request) -> JSONResponse:
+    """Latest voice-binding check, from memory. 503 when a number drifted, the check is stale or
+    never ran, or the voice provider isn't configured."""
+    monitor = request.app.state.voice_config
+    if monitor is None:
+        return JSONResponse({"status": "unconfigured"}, status_code=503)
+    report = monitor.report()
+    return _respond(report, report["status"] != "ok")

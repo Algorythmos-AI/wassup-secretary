@@ -35,7 +35,7 @@ environment settings.
 |---|---|---|---|---|
 | voice-gateway | `wassup-secretary-voice-gateway` | default CMD | — | `WASSUP_DATABASE_URL` (app_voice), `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_ENVIRONMENT` |
 | core-api | `wassup-secretary-core-api` | default CMD | — | `WASSUP_DATABASE_URL` (app_core), `WASSUP_FIREBASE_PROJECT_ID`, `WASSUP_CORS_ORIGINS`, `WASSUP_ENVIRONMENT` |
-| ops-worker | `wassup-secretary-ops-worker` | default CMD | `alembic -c db/alembic.ini upgrade head` with `WASSUP_MIGRATION_DATABASE_URL` (migrator) | `WASSUP_DATABASE_URL` (app_ops), `WASSUP_RESEND_API_KEY`, `WASSUP_ALERT_EMAIL_FROM`, `WASSUP_OPS_ALERT_EMAILS`, `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_VOICE_GATEWAY_URL` (private-network URL, enables replay), `WASSUP_TWILIO_ACCOUNT_SID` + `WASSUP_TWILIO_API_KEY_SID` + `WASSUP_TWILIO_API_KEY_SECRET` (telephony monitor; an API key, never the auth token), `WASSUP_TELEPHONY_MIN_BALANCE`, heartbeat URLs |
+| ops-worker | `wassup-secretary-ops-worker` | default CMD | `alembic -c db/alembic.ini upgrade head` with `WASSUP_MIGRATION_DATABASE_URL` (migrator) | `WASSUP_DATABASE_URL` (app_ops), `WASSUP_RESEND_API_KEY`, `WASSUP_ALERT_EMAIL_FROM`, `WASSUP_OPS_ALERT_EMAILS`, `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_VOICE_GATEWAY_URL` (private-network URL, enables replay), `WASSUP_TWILIO_ACCOUNT_SID` + `WASSUP_TWILIO_API_KEY_SID` + `WASSUP_TWILIO_API_KEY_SECRET` (telephony monitor; an API key, never the auth token), `WASSUP_TELEPHONY_MIN_BALANCE`, `WASSUP_VOICE_WEBHOOK_URL` (the voice-gateway webhook every published agent version must post to), heartbeat URLs |
 
 - Set `WASSUP_ENVIRONMENT` to `staging` or `production`. In these environments the API docs are off and test sign-in is refused. If it is not set, it defaults to `production`, which fails closed.
 - Keep the database on the platform's **private network**, with its public TCP proxy off.
@@ -62,8 +62,9 @@ Then add staff: a `staff_users` row keyed by their Firebase uid, plus `clinic_me
    - each tool: `https://<voice-gateway>/v1/retell/tools/<clinic-slug>/<tool>`, with `timeout_ms` about 3000 and `max_retry` 0.
    - the prompt must follow the [voice tool contract](../voice-tools.md): `ok: false` means **not saved**, and the agent must say so.
 2. **Publish** the draft, then **rebind the number** to the new published version (see `retell_agents` binding notes in the legacy repo).
-3. **Test call.** The call must appear in `calls` with the right `clinic_id`, and `/health/freshness` on ops-worker must say `ok`.
-4. **Rollback:** rebind the number to the previous published version. It takes seconds.
+3. **Record the binding.** Set `clinic_voice_agents.agent_version` to the published version you bound. `/health/voice-config` then pages if anyone rebinds the number, edits it onto a draft, or changes the webhook.
+4. **Test call.** The call must appear in `calls` with the right `clinic_id`, and `/health/freshness` on ops-worker must say `ok`.
+5. **Rollback:** rebind the number to the previous published version, which takes seconds, and update `agent_version` to match.
 
 ## 5. Monitors (Better Stack)
 - HTTP monitors on each service's `/health`.
@@ -72,7 +73,8 @@ Then add staff: a `staff_users` row keyed by their Firebase uid, plus `clinic_me
 - Alert on non-2xx from ops-worker `/health/outbox`, which covers dead letters, overdue alerts and repeated failures. See the [runbook](outbox-dead-letter.md).
 - Alert on non-2xx from ops-worker `/health/replay`, which covers webhook events or tool requests that couldn't be processed. See the [runbook](replay-exhausted.md).
 - Alert on non-2xx from ops-worker `/health/telephony`: the account is suspended or closed, the balance is below the floor, a line number is missing from the account, or the check is stale. This is the September 2026 outage, caught in minutes.
-- Heartbeat monitors: `WASSUP_OUTBOX_HEARTBEAT_URL`, `WASSUP_CANARY_HEARTBEAT_URL`, `WASSUP_REPLAY_HEARTBEAT_URL` and `WASSUP_TELEPHONY_HEARTBEAT_URL`.
+- Alert on non-2xx from ops-worker `/health/voice-config`, which fires when a clinic number is not bound to its clinic's agent, is on a draft or "latest" version, is not on the pinned version, or is on a version whose webhook isn't ours.
+- Heartbeat monitors: `WASSUP_OUTBOX_HEARTBEAT_URL`, `WASSUP_CANARY_HEARTBEAT_URL`, `WASSUP_REPLAY_HEARTBEAT_URL`, `WASSUP_TELEPHONY_HEARTBEAT_URL` and `WASSUP_VOICE_CONFIG_HEARTBEAT_URL`.
 - These endpoints are unauthenticated but cached and single-flight: at most one database or provider query per probe every 15–60 s.
 
 ## 6. Daily line check

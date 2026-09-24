@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.app import create_app
 from wassup_core.db import make_engine
 
-from ops_worker import canary, replay, retention, telephony
+from ops_worker import canary, replay, retention, telephony, voice_config
 from ops_worker.health_routes import install_probes
 from ops_worker.health_routes import router as health_router
 from ops_worker.notifier import EmailSender, NotConfiguredSender, ResendEmailSender
@@ -116,6 +116,23 @@ def _scheduled_jobs(
             )
         )
 
+    drift: voice_config.VoiceConfigMonitor | None = app.state.voice_config
+    if drift is not None and settings.retell_api_key is not None:
+        config_api = RetellClient(settings.retell_api_key.get_secret_value())
+        live_drift = drift
+
+        async def voice_config_job() -> str:
+            return await voice_config.tick(live_drift, eng, config_api, sender)
+
+        jobs.append(
+            (
+                "voice_config",
+                settings.voice_config_interval_s,
+                voice_config_job,
+                settings.voice_config_heartbeat_url,
+            )
+        )
+
     cfg: canary.CanaryConfig = app.state.canary_config
     live_retell: RetellApi | None = app.state.retell
     if cfg.enabled and live_retell is not None:
@@ -141,6 +158,15 @@ def build_app(
         retell = RetellClient(settings.retell_api_key.get_secret_value())
     app.state.retell = retell
     install_probes(app.state)
+    app.state.voice_config = (
+        voice_config.VoiceConfigMonitor(
+            environment="production" if settings.is_production else "staging",
+            webhook_url=settings.voice_webhook_url,
+            ops_emails=settings.ops_emails,
+        )
+        if settings.retell_api_key is not None
+        else None
+    )
     app.state.telephony = (
         telephony.TelephonyMonitor(
             telephony.TelephonyConfig(

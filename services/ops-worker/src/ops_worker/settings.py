@@ -50,6 +50,11 @@ class OpsWorkerSettings(BaseServiceSettings):
     telephony_min_balance: Decimal = Decimal(20)
     telephony_interval_s: float = 300.0
     telephony_heartbeat_url: str = ""
+    # Voice configuration drift: the webhook URL every published agent version must post to
+    # (e.g. https://<voice-gateway>/v1/retell/webhook). Empty = the webhook is not compared.
+    voice_webhook_url: str = ""
+    voice_config_interval_s: float = 900.0
+    voice_config_heartbeat_url: str = ""
     # Raw provider payloads (verbatim caller content) are deleted this long after they are finished.
     raw_retention_days: int = 90
     retention_interval_s: float = 6 * 3600

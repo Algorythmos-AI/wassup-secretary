@@ -29,5 +29,12 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
   - **Monitor endpoints** are cached and single-flight.
   - Migration `0005`; runbooks `outbox-dead-letter.md` and `replay-exhausted.md`.
 - Telephony account monitor in ops-worker. Every 5 minutes it checks the account status, balance against a floor, and that each AI line number is still owned, using an API key and reading nothing else from the response. A change to failing emails ops at once, then every 6 hours while it stays failing. `/health/telephony` serves the last result from memory and turns red when a check is failing, stale or never ran. ops-worker's background jobs are now declared in one place.
+- Voice-configuration drift monitor in ops-worker:
+  - Every 15 minutes, each active clinic number is compared with the voice provider's live configuration.
+  - Each number is reported as one of: `not_found`, `unbound`, `wrong_agent`, `floating_version`, `wrong_version`, `unpublished_version`, `webhook_mismatch` or `ok`.
+  - Agent versions are fetched exactly, and a version the API didn't return as asked for is never trusted.
+  - Ops is alerted on a change to failing and then every 12 hours; `/health/voice-config` reports the current state.
+  - Telephony and voice-config monitors now share the same `Watch` state.
+  - Verified read-only against production: both lines report `ok`, and a deliberately wrong webhook or pinned version is detected.
 - Raw-payload retention in ops-worker: `retell_events_raw`, `tool_requests_raw` and `quarantine_events` (verbatim caller content duplicated from the call records) are deleted `WASSUP_RAW_RETENTION_DAYS` (default 90) after they are finished, in small batches. Unresolved rows are never deleted. Migration `0006`.
 - Deploy readiness: migrations ship in the ops-worker image (run as the pre-deploy step), build-once image publishing to GHCR tagged by source tree (gated behind `PUBLISH_IMAGES`), go-live runbook.

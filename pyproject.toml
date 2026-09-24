@@ -33,6 +33,7 @@ ignore = ["PLR0913", "PLR2004"]
 # SQL is kept verbatim and readable in migrations and DB tests; don't wrap it for line length.
 "db/migrations/**" = ["E501"]
 "services/*/src/*/store.py" = ["E501"]
+"services/*/src/*/tools.py" = ["E501"]
 "tests/tenancy/**" = ["S101", "E501"]
 "tests/support/**" = ["S101", "E501"]
 "services/*/tests/**" = ["S101", "E501"]

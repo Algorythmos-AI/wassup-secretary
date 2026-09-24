@@ -11,6 +11,7 @@ from wassup_core.app import create_app
 from wassup_core.db import make_engine
 
 from voice_gateway.settings import VoiceGatewaySettings
+from voice_gateway.tools import router as tools_router
 from voice_gateway.webhook import router as webhook_router
 
 # Sized from production traffic: a full call_analyzed payload was p50 17 KB, p99 87 KB,
@@ -25,7 +26,7 @@ def build_app(
     settings = settings or VoiceGatewaySettings()
     app = create_app(
         settings,
-        [webhook_router],
+        [webhook_router, tools_router],
         body_limits={"/v1/retell/webhook": WEBHOOK_BODY_LIMIT, "/v1/retell/tools": TOOL_BODY_LIMIT},
     )
     app.state.engine = engine

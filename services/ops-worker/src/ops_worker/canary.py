@@ -8,8 +8,8 @@ line and confirm the call arrives.
 How: once per local day at ``canary_local_time`` each AI line is called FROM another AI line
 with a one-line "line check" agent, through the real path. voice-gateway recognises the call as
 synthetic and records its receipt in ``canary_runs``. A run that Retell refuses, or that is not
-received within ``RECEIPT_WINDOW``, alerts ops once by email. ``status`` also fails when no run happened in
-``STALE_AFTER`` — a dead scheduler is itself an outage.
+received within ``RECEIPT_WINDOW``, alerts ops once by email. ``status`` also fails when no
+run happened in ``STALE_AFTER`` — a dead scheduler is itself an outage.
 """
 
 from __future__ import annotations

@@ -48,6 +48,9 @@ def make_engine(
         max_overflow=0,
         pool_timeout=pool_timeout_s,
         pool_pre_ping=True,
+        # Bound values are personal data (phone numbers, names, notes); keep them out of the
+        # exception messages SQLAlchemy builds, which end up in error reports.
+        hide_parameters=True,
         connect_args=connect_args,
     )
 

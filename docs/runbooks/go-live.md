@@ -17,7 +17,9 @@ environment settings.
 ## 1. Database (once per environment)
 
 1. Create a Postgres 15+ database for the environment (for example a Railway Postgres service).
-2. As the database admin, run `db/roles.sql`, then `db/grant_database.sql` (pass `-v dbname=<name>`):
+2. As the database admin, run `db/roles.sql`, then `db/grant_database.sql` (pass `-v dbname=<name>`).
+   Both are idempotent: re-run them whenever a release changes them (migrations check for the roles
+   they need and stop with a clear message if one is missing):
    ```bash
    psql "$ADMIN_URL" -f db/roles.sql
    psql "$ADMIN_URL" -v dbname=wassup -f db/grant_database.sql

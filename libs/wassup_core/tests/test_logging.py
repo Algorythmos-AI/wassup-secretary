@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pytest
 import structlog
@@ -27,4 +28,42 @@ def test_rendered_log_never_contains_personal_values(capsys: pytest.CaptureFixtu
     assert record["service"] == "test-service"
     assert "+61400000999" not in line
     assert "I feel unwell" not in line
+    structlog.reset_defaults()
+
+
+def _raise_with_personal_data() -> None:
+    try:
+        raise ValueError("Key (phone)=(+61400000999) already exists")
+    except ValueError as inner:
+        raise RuntimeError("lookup failed for Test Patient") from inner
+
+
+def test_exceptions_are_logged_without_their_message(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("test-service")
+    try:
+        _raise_with_personal_data()
+    except RuntimeError:
+        get_logger().exception("failed", call_id="c3")
+    line = capsys.readouterr().out.strip().splitlines()[-1]
+    record = json.loads(line)
+    assert "+61400000999" not in line and "Test Patient" not in line
+    assert record["exception"].startswith("builtins.RuntimeError at test_logging.py:")
+    assert "caused by builtins.ValueError" in record["exception"]
+    structlog.reset_defaults()
+
+
+def test_library_tracebacks_are_redacted_too(capsys: pytest.CaptureFixture[str]) -> None:
+    """uvicorn logs every unhandled error with a full traceback through the stdlib logger."""
+    configure_logging("test-service")
+    try:
+        _raise_with_personal_data()
+    except RuntimeError:
+        logging.getLogger("uvicorn.error").exception("Exception in ASGI application")
+    logging.getLogger("httpx").info("HTTP Request: GET https://api.example.test/?phone=+614000")
+    out = capsys.readouterr().out
+    assert "+61400000999" not in out and "Test Patient" not in out and "+614000" not in out
+    record = json.loads(out.strip().splitlines()[-1])
+    assert record["logger"] == "uvicorn.error"
+    assert record["event"] == "Exception in ASGI application"
+    assert "builtins.RuntimeError" in record["exception"]
     structlog.reset_defaults()

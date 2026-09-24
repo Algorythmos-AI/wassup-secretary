@@ -21,7 +21,9 @@ class BaseServiceSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WASSUP_", extra="ignore", frozen=True)
 
     service_name: str = "wassup"
-    environment: Environment = Environment.LOCAL
+    # Fails closed: a deployment that forgets WASSUP_ENVIRONMENT gets production behaviour (no
+    # API docs, no test sign-in), never the permissive local defaults.
+    environment: Environment = Environment.PRODUCTION
     # Build identity, injected by the image build. /health reports it so a deploy can be
     # verified against the exact source tree it was built from.
     version: str = "0.0.0-dev"

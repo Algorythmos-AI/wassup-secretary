@@ -73,3 +73,8 @@ async def test_statement_timeout_is_applied(db_url: str) -> None:
         assert value == "100ms"
     finally:
         await engine.dispose()
+
+
+def test_engine_never_puts_query_parameters_in_errors() -> None:
+    engine = make_engine("postgresql://u@localhost:1/db")
+    assert engine.sync_engine.hide_parameters is True

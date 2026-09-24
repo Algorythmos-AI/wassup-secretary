@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -212,3 +214,100 @@ async def test_workflow_requires_idempotency_and_version_headers(
         headers=_auth(RECEPTIONIST_A),
     )
     assert response.status_code == 422
+
+
+async def test_idempotency_key_is_bound_to_one_request(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    first_call, second_call = _new_calls(db_engine, seed.clinic_a, 2)
+    key = "key-" + uuid.uuid4().hex
+
+    def post(call_id: uuid.UUID, status: str, version: str = "1") -> Any:
+        return client.post(
+            f"/v1/clinics/{seed.clinic_a}/calls/{call_id}/workflow",
+            json={"status": status},
+            headers={**_auth(RECEPTIONIST_A), "Idempotency-Key": key, "If-Match": version},
+        )
+
+    assert (await post(first_call, "addressed")).status_code == 200
+    # Same key on another call: rejected, and the other call is untouched (not silently skipped).
+    other = await post(second_call, "addressed")
+    assert other.status_code == 422
+    # Same key, same call, different body: also a client bug, not a retry.
+    assert (await post(first_call, "following_up")).status_code == 422
+    with db_engine.connect() as conn:
+        status = conn.execute(
+            text("SELECT workflow_status FROM calls WHERE id = :id"), {"id": second_call}
+        ).scalar()
+    assert status != "addressed"
+
+
+async def test_replay_returns_the_original_answer_after_later_changes(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    [call_id] = _new_calls(db_engine, seed.clinic_a, 1)
+    url = f"/v1/clinics/{seed.clinic_a}/calls/{call_id}/workflow"
+    first_key = "key-" + uuid.uuid4().hex
+    headers = {**_auth(RECEPTIONIST_A), "Idempotency-Key": first_key, "If-Match": "1"}
+    first = await client.post(url, json={"status": "following_up"}, headers=headers)
+    later = await client.post(
+        url,
+        json={"status": "addressed"},
+        headers={**headers, "Idempotency-Key": "key-" + uuid.uuid4().hex, "If-Match": "2"},
+    )
+    assert later.json()["version"] == 3
+    retry = await client.post(url, json={"status": "following_up"}, headers=headers)
+    assert (
+        retry.json()
+        == first.json()
+        == {
+            "call_id": str(call_id),
+            "workflow_status": "following_up",
+            "version": 2,
+        }
+    )
+
+
+async def test_call_list_is_audited_with_the_calls_shown(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    response = await client.get(
+        f"/v1/clinics/{seed.clinic_a}/calls", params={"limit": 3}, headers=_auth(RECEPTIONIST_A)
+    )
+    shown = [item["id"] for item in response.json()["items"]]
+    with db_engine.connect() as conn:
+        detail = conn.execute(
+            text(
+                "SELECT detail FROM audit_log WHERE action = 'call.list' AND clinic_id = :c "
+                "ORDER BY chain_seq DESC LIMIT 1"
+            ),
+            {"c": seed.clinic_a},
+        ).scalar()
+    assert detail == {"call_ids": shown}
+
+
+def _cursor(value: Any) -> str:
+    return base64.urlsafe_b64encode(json.dumps(value).encode()).decode()
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        "not-base64-%%%",
+        "é",
+        _cursor([None, 5]),
+        _cursor(["2026-09-01T00:00:00+00:00"]),
+        _cursor({"a": 1, "b": 2}),
+        _cursor(["not a date", str(uuid.uuid4())]),
+        _cursor(["2026-09-01T00:00:00", str(uuid.uuid4())]),  # no timezone
+        _cursor([None, "not-a-uuid"]),
+        _cursor(42),
+    ],
+)
+async def test_hostile_cursors_are_400_not_500(
+    client: httpx.AsyncClient, seed: Seed, cursor: str
+) -> None:
+    response = await client.get(
+        f"/v1/clinics/{seed.clinic_a}/calls", params={"cursor": cursor}, headers=_auth(ADMIN_AB)
+    )
+    assert response.status_code == 400

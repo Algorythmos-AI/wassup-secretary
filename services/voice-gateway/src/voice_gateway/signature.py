@@ -12,18 +12,23 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import time
 from collections.abc import Sequence
 
 DEFAULT_TOLERANCE_S = 300
+# ASCII only: str.isdigit() accepts characters int() rejects (e.g. superscripts), and
+# hmac.compare_digest() raises on non-ASCII strings. Anything that doesn't match is simply invalid.
+_TIMESTAMP = re.compile(r"[0-9]{1,16}")
+_DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
 def _parse(header: str) -> tuple[int, str] | None:
-    parts = dict(p.split("=", 1) for p in header.split(",") if "=" in p)
-    ts, digest = parts.get("v"), parts.get("d")
-    if not ts or not digest or not ts.isdigit():
+    parts = dict(p.strip().split("=", 1) for p in header.split(",") if "=" in p)
+    ts, digest = parts.get("v", ""), parts.get("d", "").lower()
+    if not _TIMESTAMP.fullmatch(ts) or not _DIGEST.fullmatch(digest):
         return None
-    return int(ts), digest.lower()
+    return int(ts), digest
 
 
 def sign(body: bytes, key: str, timestamp_ms: int) -> str:

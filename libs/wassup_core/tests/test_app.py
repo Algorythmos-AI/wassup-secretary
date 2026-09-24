@@ -1,3 +1,4 @@
+import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -92,3 +93,11 @@ def test_streamed_body_without_content_length_is_still_limited() -> None:
         "/small", content=chunks(), headers={"content-type": "application/json"}
     )
     assert response.status_code == 413
+
+
+def test_environment_defaults_to_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deployment that forgets WASSUP_ENVIRONMENT must fail closed."""
+    monkeypatch.delenv("WASSUP_ENVIRONMENT", raising=False)
+    settings = BaseServiceSettings()
+    assert settings.environment is Environment.PRODUCTION
+    assert not settings.expose_api_docs

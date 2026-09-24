@@ -13,6 +13,7 @@ from wassup_core.db import make_engine
 
 from core_api.analytics import router as analytics_router
 from core_api.auth import TokenVerifier, build_verifier
+from core_api.events import router as events_router
 from core_api.routes import router
 from core_api.settings import CoreApiSettings
 
@@ -23,7 +24,7 @@ def build_app(
     verifier: TokenVerifier | None = None,
 ) -> FastAPI:
     settings = settings or CoreApiSettings()
-    app = create_app(settings, [router, analytics_router])
+    app = create_app(settings, [router, analytics_router, events_router])
     app.state.engine = engine
     if verifier is None and (settings.auth_mode == "test" or settings.firebase_project_id):
         verifier = build_verifier(settings)  # raises if test auth is used outside local/test
@@ -33,7 +34,13 @@ def build_app(
             CORSMiddleware,
             allow_origins=settings.allowed_origins,
             allow_methods=["GET", "POST"],
-            allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "If-Match"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "Idempotency-Key",
+                "If-Match",
+                "Last-Event-ID",
+            ],
         )
 
     @asynccontextmanager

@@ -22,6 +22,7 @@ class Staff:
     email: str
     staff_user_id: uuid.UUID
     roles: dict[uuid.UUID, str] = field(default_factory=dict)
+    expires_at: float | None = None
 
     def require(self, clinic_id: uuid.UUID, min_role: str = "viewer") -> None:
         """404 when not a member (never reveal that another clinic's data exists); 403 when the
@@ -63,4 +64,5 @@ async def current_staff(request: Request) -> Staff:
         email=principal.email,
         staff_user_id=rows[0]["staff_user_id"],
         roles={r["clinic_id"]: r["role"] for r in rows},
+        expires_at=principal.expires_at,
     )

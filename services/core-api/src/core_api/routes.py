@@ -299,4 +299,16 @@ async def update_workflow(
             # The same key raced in on another call; this transaction (and its update) rolls back.
             raise _key_reused() from exc
         await _audit(conn, clinic_id, staff, "call.workflow", str(call_id))
+        # Every other screen of this clinic hears about the change (ids only).
+        await conn.execute(
+            text(
+                "INSERT INTO outbox_events (clinic_id, event_type, dedupe_key, payload) "
+                "VALUES (:c, 'call.workflow', :k, CAST(:p AS jsonb)) ON CONFLICT (dedupe_key) DO NOTHING"
+            ),
+            {
+                "c": clinic_id,
+                "k": f"call.workflow:{call_id}:{version}",
+                "p": json.dumps({"call_id": str(call_id), "version": version}),
+            },
+        )
     return {"call_id": str(call_id), "workflow_status": action.status, "version": version}

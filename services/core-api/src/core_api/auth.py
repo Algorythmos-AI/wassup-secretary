@@ -23,6 +23,8 @@ class AuthError(Exception):
 class Principal:
     uid: str
     email: str
+    # When the sign-in token stops being valid (Unix seconds); long-lived streams end by then.
+    expires_at: float | None = None
 
 
 class TokenVerifier(Protocol):
@@ -62,7 +64,9 @@ class FirebaseVerifier:
             raise AuthError(type(exc).__name__) from exc
         if not claims.get("sub") or not claims.get("email_verified") or not claims.get("email"):
             raise AuthError("unverified_or_incomplete_identity")
-        return Principal(uid=str(claims["sub"]), email=str(claims["email"]))
+        return Principal(
+            uid=str(claims["sub"]), email=str(claims["email"]), expires_at=float(claims["exp"])
+        )
 
 
 class TestModeVerifier:

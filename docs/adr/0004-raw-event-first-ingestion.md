@@ -19,3 +19,10 @@ a retry must not page a doctor twice. Tool calls happen mid-conversation, so lat
 ## Consequences
 Nothing is lost on a bad deploy (replay from the raw log), duplicates are structurally impossible,
 and the tool-latency SLO is measured from `tool_invocations`.
+
+## Retention
+Raw payloads duplicate caller content that the call records already hold. ops-worker deletes them
+`WASSUP_RAW_RETENTION_DAYS` (default 90) after they are finished: processed or quarantined events,
+completed tool requests, and quarantine records. Anything still waiting for replay or for an
+operator's decision is kept until it is resolved. The call records themselves follow each
+clinic's contractual health-record retention; they are not touched by this job.

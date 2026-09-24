@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import FastAPI
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.app import create_app
 from wassup_core.db import make_engine
 
-from ops_worker import canary, replay, telephony
+from ops_worker import canary, replay, retention, telephony
 from ops_worker.health_routes import install_probes
 from ops_worker.health_routes import router as health_router
 from ops_worker.notifier import EmailSender, NotConfiguredSender, ResendEmailSender
@@ -64,8 +64,17 @@ def _scheduled_jobs(
             ops_emails=ops,
         )
 
+    async def retention_job() -> dict[str, int]:
+        return await retention.run(eng, timedelta(days=settings.raw_retention_days))
+
     jobs: list[Job] = [
-        ("outbox", settings.outbox_interval_s, outbox_job, settings.outbox_heartbeat_url)
+        ("outbox", settings.outbox_interval_s, outbox_job, settings.outbox_heartbeat_url),
+        (
+            "retention",
+            settings.retention_interval_s,
+            retention_job,
+            settings.retention_heartbeat_url,
+        ),
     ]
 
     if settings.voice_gateway_url and settings.retell_api_key is not None:

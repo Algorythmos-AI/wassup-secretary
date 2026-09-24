@@ -50,6 +50,10 @@ class OpsWorkerSettings(BaseServiceSettings):
     telephony_min_balance: Decimal = Decimal(20)
     telephony_interval_s: float = 300.0
     telephony_heartbeat_url: str = ""
+    # Raw provider payloads (verbatim caller content) are deleted this long after they are finished.
+    raw_retention_days: int = 90
+    retention_interval_s: float = 6 * 3600
+    retention_heartbeat_url: str = ""
 
     @property
     def telephony_configured(self) -> bool:

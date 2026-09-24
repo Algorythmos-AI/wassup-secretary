@@ -29,6 +29,11 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
   - **Monitor endpoints** are cached and single-flight.
   - Migration `0005`; runbooks `outbox-dead-letter.md` and `replay-exhausted.md`.
 - Telephony account monitor in ops-worker. Every 5 minutes it checks the account status, balance against a floor, and that each AI line number is still owned, using an API key and reading nothing else from the response. A change to failing emails ops at once, then every 6 hours while it stays failing. `/health/telephony` serves the last result from memory and turns red when a check is failing, stale or never ran. ops-worker's background jobs are now declared in one place.
+- core-api `GET /v1/clinics/{id}/analytics/summary?from&to`:
+  - Aggregates are computed in SQL on the clinic's own calendar (`local_date`, `local_hour` and weekday are stored in the clinic's timezone).
+  - Returns totals (calls, average and total duration, cost, priority, reception action), workflow counts, zero-filled daily, hourly and weekday series, sentiment and the top intents.
+  - The range defaults to the last 30 clinic days and is capped at 400; viewer role and above.
+  - Counts only, so nothing personal is read.
 - Voice-configuration drift monitor in ops-worker:
   - Every 15 minutes, each active clinic number is compared with the voice provider's live configuration.
   - Each number is reported as one of: `not_found`, `unbound`, `wrong_agent`, `floating_version`, `wrong_version`, `unpublished_version`, `webhook_mismatch` or `ok`.

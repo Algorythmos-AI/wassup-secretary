@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.app import create_app
 from wassup_core.db import make_engine
 
+from core_api.analytics import router as analytics_router
 from core_api.auth import TokenVerifier, build_verifier
 from core_api.routes import router
 from core_api.settings import CoreApiSettings
@@ -22,7 +23,7 @@ def build_app(
     verifier: TokenVerifier | None = None,
 ) -> FastAPI:
     settings = settings or CoreApiSettings()
-    app = create_app(settings, [router])
+    app = create_app(settings, [router, analytics_router])
     app.state.engine = engine
     if verifier is None and (settings.auth_mode == "test" or settings.firebase_project_id):
         verifier = build_verifier(settings)  # raises if test auth is used outside local/test

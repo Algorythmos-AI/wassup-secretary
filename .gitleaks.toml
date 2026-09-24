@@ -1,0 +1,4 @@
+title = "wassup-secretary gitleaks config"
+
+[extend]
+useDefault = true

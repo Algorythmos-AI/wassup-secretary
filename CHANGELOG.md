@@ -34,6 +34,12 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
   - Returns totals (calls, average and total duration, cost, priority, reception action), workflow counts, zero-filled daily, hourly and weekday series, sentiment and the top intents.
   - The range defaults to the last 30 clinic days and is capped at 400; viewer role and above.
   - Counts only, so nothing personal is read.
+- Operator CLI `wassup` (`tools/wassup-cli`), the cutover and rollback tool:
+  - `voice bindings` flags floating or unpublished bindings.
+  - `voice export` backs up numbers plus bound agent and LLM versions as owner-only files.
+  - `voice rebind` is a dry run by default, refuses drafts and "latest", records the previous binding before writing and re-reads to verify.
+  - `voice rollback` restores the recorded binding and refuses to restore a floating binding.
+  - Verified read-only against production.
 - Voice-configuration drift monitor in ops-worker:
   - Every 15 minutes, each active clinic number is compared with the voice provider's live configuration.
   - Each number is reported as one of: `not_found`, `unbound`, `wrong_agent`, `floating_version`, `wrong_version`, `unpublished_version`, `webhook_mismatch` or `ok`.

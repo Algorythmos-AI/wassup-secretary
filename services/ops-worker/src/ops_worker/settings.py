@@ -33,6 +33,12 @@ class OpsWorkerSettings(BaseServiceSettings):
     canary_timezone: str = "Australia/Sydney"
     canary_heartbeat_url: str = ""
     reconcile_interval_s: float = 600.0
+    # Replay of stored-but-unprocessed webhook events and tool requests: voice-gateway's base URL
+    # on the private network (e.g. http://voice-gateway.railway.internal:8080). Unset = off (the
+    # /health/replay monitor still reports what is waiting).
+    voice_gateway_url: str = ""
+    replay_interval_s: float = 30.0
+    replay_heartbeat_url: str = ""
 
     @property
     def ai_lines(self) -> list[str]:

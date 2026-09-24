@@ -67,11 +67,12 @@ def db_engine() -> Iterator[Engine]:
                 .replace(':"dbname"', f'"{db_name}"')
             )
             raw.execute(grants)
+        # Migrate exactly as production does: a transactional connection, as the migrator.
+        with test_engine.connect() as conn:
             conn.execute(text("SET SESSION AUTHORIZATION wassup_migrator"))
-            cfg = Config(str(ROOT / "db" / "alembic.ini"))
-            cfg.attributes["connection"] = conn
-            command.upgrade(cfg, "head")
+            upgrade(conn, "head")
             conn.execute(text("RESET SESSION AUTHORIZATION"))
+            conn.commit()
         yield test_engine
     finally:
         test_engine.dispose()
@@ -79,6 +80,15 @@ def db_engine() -> Iterator[Engine]:
         with admin.connect() as conn:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         admin.dispose()
+
+
+def upgrade(conn: Connection, revision: str, script_location: Path | None = None) -> None:
+    """Run Alembic on ``conn`` (the production env.py, optionally another script directory)."""
+    cfg = Config(str(ROOT / "db" / "alembic.ini"))
+    if script_location is not None:
+        cfg.set_main_option("script_location", str(script_location))
+    cfg.attributes["connection"] = conn
+    command.upgrade(cfg, revision)
 
 
 def as_role(conn: Connection, role: str, clinics: list[uuid.UUID] | None) -> None:
@@ -137,3 +147,17 @@ def seed(db_engine: Engine) -> Seed:
             {"a": a, "b": b},
         )
     return Seed(a, b, call_a, call_b)
+
+
+def line_check_running(db_engine: Engine, from_number: str, to_number: str) -> None:
+    """A line-check run for this pair, as ops-worker records it when placing the call."""
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(
+            text(
+                "INSERT INTO canary_runs (run_date, to_number, from_number, status, placed_at) "
+                "VALUES (current_date, :to, :from, 'placed', now()) "
+                "ON CONFLICT (run_date, to_number) DO UPDATE SET from_number = EXCLUDED.from_number, "
+                "status = 'placed', placed_at = now(), received_at = NULL"
+            ),
+            {"to": to_number, "from": from_number},
+        )

@@ -7,6 +7,10 @@
   exponential backoff; after ``MAX_ATTEMPTS`` it is dead-lettered (``dead``) and logged loudly.
 - Alert delivery is recorded per (event, channel) as ``sending`` → ``sent``. A retry skips
   anything already sent, so a crash can cause at most a duplicate email, never a lost one.
+- Finishing is fenced on (status, attempts): a worker whose lease expired and whose event was
+  re-claimed by another worker can't overwrite the newer attempt's outcome.
+- A dead letter emails ops immediately (ids only), and ``/health/outbox`` stays red until an
+  operator re-queues or abandons it.
 """
 
 from __future__ import annotations
@@ -28,6 +32,13 @@ log = get_logger(__name__)
 
 MAX_ATTEMPTS = 8
 LEASE = timedelta(minutes=5)
+# About 3.5 minutes of consecutive failures (30 s, 60 s, 120 s backoff).
+RETRYING_ALERT_AT = 3
+
+
+class DeliveryError(RuntimeError):
+    """A handler failure whose message is ours (a short code), safe to store and log. Any other
+    exception is recorded by type name only: its message could carry personal data."""
 
 
 @dataclass(frozen=True)
@@ -94,10 +105,10 @@ async def deliver_urgent_message(ctx: HandlerContext, event: OutboxEvent) -> Non
         .one()
     )
     if message is None:
-        raise RuntimeError("message_not_found")
+        raise DeliveryError("message_not_found")
     recipients = _alert_recipients(clinic["alert_contacts"])
     if not recipients:
-        raise RuntimeError("no_alert_contacts")
+        raise DeliveryError("no_alert_contacts")
 
     claimed = (
         await ctx.conn.execute(
@@ -142,12 +153,31 @@ HANDLERS: dict[str, Handler] = {
 }
 
 
-async def _claim(engine: AsyncEngine, batch_size: int) -> list[OutboxEvent]:
+# A lease that expired on the last allowed attempt means the worker died mid-handler every time
+# (a crash loop, e.g. out of memory). Re-claiming it forever would hide that, so it dies here.
+_EXPIRE_EXHAUSTED = text(
+    """
+    UPDATE outbox_events SET status = 'dead', last_error = 'lease_expired_at_max_attempts'
+    WHERE status = 'processing' AND available_at <= now() AND attempts >= :max
+    RETURNING id, clinic_id, event_type, dedupe_key, payload, attempts
+    """
+)
+
+
+async def _active_clinics(engine: AsyncEngine) -> list[uuid.UUID]:
     async with unscoped(engine) as conn:
-        clinics = (await conn.execute(text("SELECT active_clinic_ids()"))).scalar() or []
+        return list((await conn.execute(text("SELECT active_clinic_ids()"))).scalar() or [])
+
+
+async def _claim(
+    engine: AsyncEngine, batch_size: int
+) -> tuple[list[OutboxEvent], list[OutboxEvent]]:
+    """Returns (claimed events, events just dead-lettered for exhausting their leases)."""
+    clinics = await _active_clinics(engine)
     if not clinics:
-        return []
+        return [], []
     async with clinic_scope(engine, clinics) as conn:
+        exhausted = (await conn.execute(_EXPIRE_EXHAUSTED, {"max": MAX_ATTEMPTS})).mappings().all()
         rows = (
             (
                 await conn.execute(
@@ -158,6 +188,7 @@ async def _claim(engine: AsyncEngine, batch_size: int) -> list[OutboxEvent]:
                     WHERE id IN (
                       SELECT id FROM outbox_events
                       WHERE status IN ('pending', 'processing') AND available_at <= now()
+                        AND attempts < :max
                       ORDER BY id
                       FOR UPDATE SKIP LOCKED
                       LIMIT :n
@@ -165,54 +196,90 @@ async def _claim(engine: AsyncEngine, batch_size: int) -> list[OutboxEvent]:
                     RETURNING id, clinic_id, event_type, dedupe_key, payload, attempts
                     """
                     ),
-                    {"n": batch_size, "lease": LEASE.total_seconds()},
+                    {"n": batch_size, "lease": LEASE.total_seconds(), "max": MAX_ATTEMPTS},
                 )
             )
             .mappings()
             .all()
         )
-    return [OutboxEvent(**dict(r)) for r in rows]
+    return [OutboxEvent(**dict(r)) for r in rows], [OutboxEvent(**dict(r)) for r in exhausted]
 
 
-async def _finish(engine: AsyncEngine, event: OutboxEvent, error: str | None) -> None:
+# Only the attempt that holds the current lease may record an outcome (fenced on status + attempts).
+_DONE = text(
+    "UPDATE outbox_events SET status = 'done', processed_at = now(), last_error = NULL "
+    "WHERE id = :id AND status = 'processing' AND attempts = :attempts"
+)
+_FAILED = text(
+    "UPDATE outbox_events SET status = :status, last_error = :error, "
+    "available_at = now() + make_interval(secs => :backoff) "
+    "WHERE id = :id AND status = 'processing' AND attempts = :attempts"
+)
+
+
+async def _finish(engine: AsyncEngine, event: OutboxEvent, error: str | None) -> bool:
+    """Record the outcome. Returns whether the event is now dead-lettered."""
+    fence = {"id": event.id, "attempts": event.attempts}
+    dead = error is not None and event.attempts >= MAX_ATTEMPTS
     async with clinic_scope(engine, [event.clinic_id]) as conn:
         if error is None:
-            await conn.execute(
-                text(
-                    "UPDATE outbox_events SET status = 'done', processed_at = now(), last_error = NULL WHERE id = :id"
-                ),
-                {"id": event.id},
+            result = await conn.execute(_DONE, fence)
+        else:
+            result = await conn.execute(
+                _FAILED,
+                {
+                    **fence,
+                    "status": "dead" if dead else "pending",
+                    "error": error[:200],
+                    "backoff": min(3600, 30 * 2 ** (event.attempts - 1)),
+                },
             )
-            return
-        dead = event.attempts >= MAX_ATTEMPTS
-        backoff_s = min(3600, 30 * 2 ** (event.attempts - 1))
-        await conn.execute(
-            text(
-                """
-                UPDATE outbox_events
-                SET status = :status, last_error = :error,
-                    available_at = now() + make_interval(secs => :backoff)
-                WHERE id = :id
-                """
-            ),
-            {
-                "status": "dead" if dead else "pending",
-                "error": error[:200],
-                "backoff": backoff_s,
-                "id": event.id,
-            },
+    if result.rowcount == 0:
+        # Our lease expired and another worker re-claimed the event; its outcome stands.
+        log.warning("outbox_stale_finish", event_id=event.id, attempt=event.attempts)
+        return False
+    if dead:
+        log.error(
+            "outbox_dead_letter", event_id=event.id, event_type=event.event_type, reason=error
         )
-        if dead:
-            log.error(
-                "outbox_dead_letter", event_id=event.id, event_type=event.event_type, reason=error
-            )
+    return dead
+
+
+async def _alert_dead_letter(
+    email: EmailSender, ops_emails: list[str], event: OutboxEvent, error: str
+) -> None:
+    if not ops_emails:
+        log.error("outbox_dead_letter_nobody_alerted", event_id=event.id)
+        return
+    body = "\n".join(
+        (
+            f"Outbox event {event.id} ({event.event_type}) failed {event.attempts} times and was "
+            "dead-lettered. It will not be retried until someone decides.",
+            f"Clinic id: {event.clinic_id}",
+            f"Last error: {error}",
+            "",
+            "Runbook: docs/runbooks/outbox-dead-letter.md (re-queue or abandon).",
+        )
+    )
+    try:
+        await email.send(ops_emails, f"WASSUP outbox dead letter ({event.event_type})", body)
+    except Exception as exc:
+        log.error("outbox_dead_letter_alert_failed", event_id=event.id, code=type(exc).__name__)
 
 
 async def process_batch(
-    engine: AsyncEngine, email: EmailSender, *, batch_size: int = 20, dashboard_url: str = ""
+    engine: AsyncEngine,
+    email: EmailSender,
+    *,
+    batch_size: int = 20,
+    dashboard_url: str = "",
+    ops_emails: list[str] | None = None,
 ) -> int:
     """Claim and handle one batch. Returns how many events were claimed."""
-    events = await _claim(engine, batch_size)
+    events, exhausted = await _claim(engine, batch_size)
+    for event in exhausted:
+        log.error("outbox_dead_letter", event_id=event.id, event_type=event.event_type)
+        await _alert_dead_letter(email, ops_emails or [], event, "lease_expired_at_max_attempts")
     for event in events:
         handler = HANDLERS.get(event.event_type)
         error: str | None = None
@@ -222,8 +289,10 @@ async def process_batch(
             try:
                 async with clinic_scope(engine, [event.clinic_id]) as conn:
                     await handler(HandlerContext(conn, email, dashboard_url), event)
+            except DeliveryError as exc:
+                error = str(exc)
             except Exception as exc:
-                error = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+                error = type(exc).__name__
         if error:
             log.warning(
                 "outbox_event_failed",
@@ -231,5 +300,39 @@ async def process_batch(
                 attempt=event.attempts,
                 reason=error,
             )
-        await _finish(engine, event, error)
+        if await _finish(engine, event, error) and error is not None:
+            await _alert_dead_letter(email, ops_emails or [], event, error)
     return len(events)
+
+
+async def health(engine: AsyncEngine, max_pending_age: timedelta) -> dict[str, Any]:
+    """Counts only. 'failing' when anything is dead-lettered, an event has waited too long (a
+    stuck or crashed consumer), or an event keeps failing (an urgent alert that can't be
+    delivered shouldn't wait for all its retries to be exhausted before someone hears about it)."""
+    clinics = await _active_clinics(engine)
+    async with clinic_scope(engine, clinics) as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT count(*) FILTER (WHERE status = 'dead') AS dead,
+                               count(*) FILTER (WHERE status IN ('pending', 'processing')
+                                                  AND created_at < now() - make_interval(secs => :age)
+                                                  AND available_at < now()) AS overdue,
+                               count(*) FILTER (WHERE status IN ('pending', 'processing')
+                                                  AND attempts >= :retrying) AS retrying,
+                               count(*) FILTER (WHERE status IN ('pending', 'processing')) AS open
+                        FROM outbox_events
+                        WHERE status IN ('pending', 'processing', 'dead')
+                        """
+                    ),
+                    {"age": max_pending_age.total_seconds(), "retrying": RETRYING_ALERT_AT},
+                )
+            )
+            .mappings()
+            .one()
+        )
+    counts = {key: int(value) for key, value in row.items()}
+    failing = counts["dead"] or counts["overdue"] or counts["retrying"]
+    return {**counts, "status": "failing" if failing else "ok"}

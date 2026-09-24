@@ -7,12 +7,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 
+import httpx
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.app import create_app
 from wassup_core.db import make_engine
 
-from ops_worker import canary
+from ops_worker import canary, replay
+from ops_worker.health_routes import install_probes
 from ops_worker.health_routes import router as health_router
 from ops_worker.notifier import EmailSender, NotConfiguredSender, ResendEmailSender
 from ops_worker.outbox import process_batch
@@ -53,6 +55,7 @@ def build_app(
     if retell is None and settings.retell_api_key is not None:
         retell = RetellClient(settings.retell_api_key.get_secret_value())
     app.state.retell = retell
+    install_probes(app.state)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -63,6 +66,7 @@ def build_app(
             )
             app.state.engine = owned
         tasks: list[asyncio.Task[None]] = []
+        clients: list[httpx.AsyncClient] = []
         if settings.scheduler_enabled and app.state.engine is not None:
             sender = email_sender(settings)
             eng: AsyncEngine = app.state.engine
@@ -73,6 +77,7 @@ def build_app(
                     sender,
                     batch_size=settings.outbox_batch_size,
                     dashboard_url=settings.dashboard_url,
+                    ops_emails=settings.ops_emails,
                 )
 
             tasks.append(
@@ -85,6 +90,27 @@ def build_app(
                     )
                 )
             )
+            if settings.voice_gateway_url and settings.retell_api_key is not None:
+                gateway = replay.Gateway(
+                    base_url=settings.voice_gateway_url,
+                    sign=replay.retell_signer(settings.retell_api_key.get_secret_value()),
+                    client=httpx.AsyncClient(timeout=10.0),
+                )
+                clients.append(gateway.client)
+
+                async def replay_job() -> dict[str, int]:
+                    return await replay.run(eng, gateway, sender, settings.ops_emails)
+
+                tasks.append(
+                    asyncio.create_task(
+                        run_every(
+                            "replay",
+                            settings.replay_interval_s,
+                            replay_job,
+                            settings.replay_heartbeat_url,
+                        )
+                    )
+                )
             cfg: canary.CanaryConfig = app.state.canary_config
             live_retell: RetellApi | None = app.state.retell
             if cfg.enabled and live_retell is not None:
@@ -105,6 +131,8 @@ def build_app(
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
+            for client in clients:
+                await client.aclose()
             if owned is not None:
                 await owned.dispose()
 

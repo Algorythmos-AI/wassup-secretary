@@ -34,9 +34,9 @@ environment settings.
 |---|---|---|---|---|
 | voice-gateway | `wassup-secretary-voice-gateway` | default CMD | — | `WASSUP_DATABASE_URL` (app_voice), `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_ENVIRONMENT` |
 | core-api | `wassup-secretary-core-api` | default CMD | — | `WASSUP_DATABASE_URL` (app_core), `WASSUP_FIREBASE_PROJECT_ID`, `WASSUP_CORS_ORIGINS`, `WASSUP_ENVIRONMENT` |
-| ops-worker | `wassup-secretary-ops-worker` | default CMD | `alembic -c db/alembic.ini upgrade head` with `WASSUP_MIGRATION_DATABASE_URL` (migrator) | `WASSUP_DATABASE_URL` (app_ops), `WASSUP_RESEND_API_KEY`, `WASSUP_ALERT_EMAIL_FROM`, `WASSUP_OPS_ALERT_EMAILS`, `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, heartbeat URLs |
+| ops-worker | `wassup-secretary-ops-worker` | default CMD | `alembic -c db/alembic.ini upgrade head` with `WASSUP_MIGRATION_DATABASE_URL` (migrator) | `WASSUP_DATABASE_URL` (app_ops), `WASSUP_RESEND_API_KEY`, `WASSUP_ALERT_EMAIL_FROM`, `WASSUP_OPS_ALERT_EMAILS`, `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_VOICE_GATEWAY_URL` (private-network URL, enables replay), heartbeat URLs |
 
-- Set `WASSUP_ENVIRONMENT` to `staging` or `production`. In these environments the API docs are off and test sign-in is refused.
+- Set `WASSUP_ENVIRONMENT` to `staging` or `production`. In these environments the API docs are off and test sign-in is refused. If it is not set, it defaults to `production`, which fails closed.
 - Keep the database on the platform's **private network**, with its public TCP proxy off.
 - Health checks: `GET /health` on every service. Deploy verification: `/health` must report the expected `tree`.
 
@@ -59,6 +59,7 @@ Then add staff: a `staff_users` row keyed by their Firebase uid, plus `clinic_me
 1. **Retell workspace for the environment:** create a new agent draft and set:
    - webhook: `https://<voice-gateway>/v1/retell/webhook`
    - each tool: `https://<voice-gateway>/v1/retell/tools/<clinic-slug>/<tool>`, with `timeout_ms` about 3000 and `max_retry` 0.
+   - the prompt must follow the [voice tool contract](../voice-tools.md): `ok: false` means **not saved**, and the agent must say so.
 2. **Publish** the draft, then **rebind the number** to the new published version (see `retell_agents` binding notes in the legacy repo).
 3. **Test call.** The call must appear in `calls` with the right `clinic_id`, and `/health/freshness` on ops-worker must say `ok`.
 4. **Rollback:** rebind the number to the previous published version. It takes seconds.
@@ -67,7 +68,10 @@ Then add staff: a `staff_users` row keyed by their Firebase uid, plus `clinic_me
 - HTTP monitors on each service's `/health`.
 - Alert on non-2xx from ops-worker `/health/freshness` (ingestion gap).
 - Alert on non-2xx from ops-worker `/health/canary`, once the line check is enabled.
-- Heartbeat monitors: `WASSUP_OUTBOX_HEARTBEAT_URL` and `WASSUP_CANARY_HEARTBEAT_URL`.
+- Alert on non-2xx from ops-worker `/health/outbox`, which covers dead letters, overdue alerts and repeated failures. See the [runbook](outbox-dead-letter.md).
+- Alert on non-2xx from ops-worker `/health/replay`, which covers webhook events or tool requests that couldn't be processed. See the [runbook](replay-exhausted.md).
+- Heartbeat monitors: `WASSUP_OUTBOX_HEARTBEAT_URL`, `WASSUP_CANARY_HEARTBEAT_URL` and `WASSUP_REPLAY_HEARTBEAT_URL`.
+- These endpoints are unauthenticated but cached and single-flight: at most one database or provider query per probe every 15–60 s.
 
 ## 6. Daily line check
 The line check needs the telephony trunk to allow **outbound calls to Australian numbers**: termination credentials for the voice provider, and geographic permissions limited to Australia. Then set:

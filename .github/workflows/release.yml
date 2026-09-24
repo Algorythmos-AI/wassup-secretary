@@ -1,0 +1,50 @@
+name: release
+
+# Build each service image ONCE per source tree and publish it to GHCR, tagged by the git tree
+# hash (a merge commit changes the SHA but not the tree, so staging and production run the exact
+# same bytes). Publishing is outward-facing, so it is OFF until the owner sets the repository
+# variable PUBLISH_IMAGES=true. Deploys are documented in docs/runbooks/go-live.md.
+
+on:
+  push:
+    branches: [integration, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: vars.PUBLISH_IMAGES == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [voice-gateway, core-api, ops-worker]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build and push ${{ matrix.service }}
+        env:
+          SERVICE: ${{ matrix.service }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          TREE=$(git rev-parse HEAD^{tree})
+          IMAGE="ghcr.io/algorythmos-ai/wassup-secretary-${SERVICE}"
+          echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          if docker manifest inspect "${IMAGE}:tree-${TREE}" >/dev/null 2>&1; then
+            echo "Image for tree ${TREE} already published; reusing it."
+          else
+            docker build --build-arg SERVICE="${SERVICE}" --build-arg GIT_TREE="${TREE}" \
+              --build-arg VERSION="${GITHUB_SHA}" -t "${IMAGE}:tree-${TREE}" .
+            docker push "${IMAGE}:tree-${TREE}"
+          fi
+          echo "### ${SERVICE}: \`${IMAGE}:tree-${TREE}\`" >> "$GITHUB_STEP_SUMMARY"

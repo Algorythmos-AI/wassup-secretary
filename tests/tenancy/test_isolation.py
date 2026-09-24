@@ -101,7 +101,8 @@ def test_resolver_requires_agent_and_number_to_agree(db_engine: Engine, seed: Se
     ("role", "function_call"),
     [
         ("app_core", "SELECT resolve_clinic_for_call('agent_test_a', NULL)"),
-        ("app_voice", "SELECT staff_clinic_ids('uid')"),
+        ("app_voice", "SELECT * FROM staff_memberships('uid')"),
+        ("app_ops", "SELECT * FROM staff_memberships('uid')"),
         ("app_voice", "SELECT active_clinic_ids()"),
         ("app_core", "SELECT active_clinic_ids()"),
     ],

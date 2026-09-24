@@ -1,0 +1,1 @@
+"""WASSUP core-api service."""

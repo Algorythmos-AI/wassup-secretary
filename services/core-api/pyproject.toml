@@ -1,0 +1,20 @@
+[project]
+name = "wassup-core-api"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+dependencies = [
+  "wassup-core",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+]
+
+[tool.uv.sources]
+wassup-core = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/core_api"]

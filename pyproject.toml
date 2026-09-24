@@ -15,6 +15,9 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
   "pre-commit>=3.8",
+  "alembic>=1.13",
+  "sqlalchemy>=2.0.30",
+  "psycopg[binary]>=3.2",
 ]
 
 [tool.ruff]
@@ -27,6 +30,9 @@ ignore = ["PLR0913", "PLR2004"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101", "S105", "S106", "PLR2004"]
+# SQL is kept verbatim and readable in migrations and DB tests; don't wrap it for line length.
+"db/migrations/**" = ["E501"]
+"tests/tenancy/**" = ["S101", "E501"]
 
 [tool.mypy]
 python_version = "3.12"

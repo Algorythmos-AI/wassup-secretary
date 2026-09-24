@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 import pytest
-from ops_worker import telephony
+from ops_worker import telephony, watch
 from ops_worker.main import build_app
 from ops_worker.settings import OpsWorkerSettings
 from ops_worker.telephony import TelephonyConfig, TelephonyMonitor, TwilioClient
@@ -71,7 +71,7 @@ async def test_alerts_once_on_failure_then_again_only_after_the_realert_period(
 ) -> None:
     monitor, sender, api = _monitor(), FakeSender(), FakeApi(status="suspended")
     clock = [1_000_000.0]
-    monkeypatch.setattr(telephony.time, "time", lambda: clock[0])
+    monkeypatch.setattr(watch.time, "time", lambda: clock[0])
     assert await telephony.tick(monitor, api, sender) == "failing"
     clock[0] += 300
     await telephony.tick(monitor, api, sender)
@@ -90,7 +90,7 @@ async def test_alerts_once_on_failure_then_again_only_after_the_realert_period(
 async def test_unreachable_provider_is_unknown_then_stale(monkeypatch: pytest.MonkeyPatch) -> None:
     monitor, api = _monitor(), FakeApi()
     clock = [1_000_000.0]
-    monkeypatch.setattr(telephony.time, "time", lambda: clock[0])
+    monkeypatch.setattr(watch.time, "time", lambda: clock[0])
     assert monitor.report()["reason"] == "never_checked"
     await telephony.tick(monitor, api, FakeSender())
     assert monitor.report()["status"] == "ok"

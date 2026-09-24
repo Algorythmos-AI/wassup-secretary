@@ -1,0 +1,1 @@
+"""WASSUP ops-worker service."""

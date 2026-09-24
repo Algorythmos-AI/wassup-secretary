@@ -1,0 +1,19 @@
+[project]
+name = "wassup-core"
+version = "0.1.0"
+description = "Shared domain, database, tenancy, auth and logging for WASSUP Secretary services."
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+dependencies = [
+  "fastapi>=0.115",
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+  "structlog>=24.4",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wassup_core"]

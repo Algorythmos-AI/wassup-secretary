@@ -1,0 +1,41 @@
+# uv workspace root (virtual: not itself a package).
+[tool.uv.workspace]
+members = [
+  "libs/wassup_core",
+  "services/voice-gateway",
+  "services/core-api",
+  "services/ops-worker",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "httpx>=0.27",
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "pre-commit>=3.8",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF", "SIM", "PL"]
+ignore = ["PLR0913", "PLR2004"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "S105", "S106", "PLR2004"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers --import-mode=importlib"
+markers = ["db: needs a real Postgres (DATABASE_URL)"]

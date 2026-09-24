@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from pydantic import SecretStr
 from wassup_core.settings import BaseServiceSettings
 
@@ -39,6 +41,21 @@ class OpsWorkerSettings(BaseServiceSettings):
     voice_gateway_url: str = ""
     replay_interval_s: float = 30.0
     replay_heartbeat_url: str = ""
+    # Telephony account monitor (the September 2026 outage was this account being suspended).
+    # Use a read-only API key, never the account's master auth token.
+    twilio_account_sid: str = ""
+    twilio_api_key_sid: str = ""
+    twilio_api_key_secret: SecretStr | None = None
+    # Alert below this balance (in the account's currency) even if auto-recharge is on.
+    telephony_min_balance: Decimal = Decimal(20)
+    telephony_interval_s: float = 300.0
+    telephony_heartbeat_url: str = ""
+
+    @property
+    def telephony_configured(self) -> bool:
+        return bool(
+            self.twilio_account_sid and self.twilio_api_key_sid and self.twilio_api_key_secret
+        )
 
     @property
     def ai_lines(self) -> list[str]:

@@ -28,4 +28,5 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
     - only our own error codes are stored as `last_error`.
   - **Monitor endpoints** are cached and single-flight.
   - Migration `0005`; runbooks `outbox-dead-letter.md` and `replay-exhausted.md`.
+- Telephony account monitor in ops-worker. Every 5 minutes it checks the account status, balance against a floor, and that each AI line number is still owned, using an API key and reading nothing else from the response. A change to failing emails ops at once, then every 6 hours while it stays failing. `/health/telephony` serves the last result from memory and turns red when a check is failing, stale or never ran. ops-worker's background jobs are now declared in one place.
 - Deploy readiness: migrations ship in the ops-worker image (run as the pre-deploy step), build-once image publishing to GHCR tagged by source tree (gated behind `PUBLISH_IMAGES`), go-live runbook.

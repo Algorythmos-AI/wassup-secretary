@@ -11,6 +11,7 @@ environment settings.
 | Actions budget, or keep this repo public | CI and image builds | public for now |
 | `PUBLISH_IMAGES=true` repository variable | enables `release.yml` to push images to GHCR | off |
 | Resend account and a verified sending domain | urgent-message and line-check alert emails | needed |
+| Telephony API key for the monitor (Twilio console → API keys) | account status, balance and number checks | needed |
 | Better Stack (or similar) | external monitors and job heartbeats | needed |
 | A separate Retell **workspace** for staging | staging keys can never touch production agents | needed |
 
@@ -34,7 +35,7 @@ environment settings.
 |---|---|---|---|---|
 | voice-gateway | `wassup-secretary-voice-gateway` | default CMD | — | `WASSUP_DATABASE_URL` (app_voice), `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_ENVIRONMENT` |
 | core-api | `wassup-secretary-core-api` | default CMD | — | `WASSUP_DATABASE_URL` (app_core), `WASSUP_FIREBASE_PROJECT_ID`, `WASSUP_CORS_ORIGINS`, `WASSUP_ENVIRONMENT` |
-| ops-worker | `wassup-secretary-ops-worker` | default CMD | `alembic -c db/alembic.ini upgrade head` with `WASSUP_MIGRATION_DATABASE_URL` (migrator) | `WASSUP_DATABASE_URL` (app_ops), `WASSUP_RESEND_API_KEY`, `WASSUP_ALERT_EMAIL_FROM`, `WASSUP_OPS_ALERT_EMAILS`, `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_VOICE_GATEWAY_URL` (private-network URL, enables replay), heartbeat URLs |
+| ops-worker | `wassup-secretary-ops-worker` | default CMD | `alembic -c db/alembic.ini upgrade head` with `WASSUP_MIGRATION_DATABASE_URL` (migrator) | `WASSUP_DATABASE_URL` (app_ops), `WASSUP_RESEND_API_KEY`, `WASSUP_ALERT_EMAIL_FROM`, `WASSUP_OPS_ALERT_EMAILS`, `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_VOICE_GATEWAY_URL` (private-network URL, enables replay), `WASSUP_TWILIO_ACCOUNT_SID` + `WASSUP_TWILIO_API_KEY_SID` + `WASSUP_TWILIO_API_KEY_SECRET` (telephony monitor; an API key, never the auth token), `WASSUP_TELEPHONY_MIN_BALANCE`, heartbeat URLs |
 
 - Set `WASSUP_ENVIRONMENT` to `staging` or `production`. In these environments the API docs are off and test sign-in is refused. If it is not set, it defaults to `production`, which fails closed.
 - Keep the database on the platform's **private network**, with its public TCP proxy off.
@@ -70,7 +71,8 @@ Then add staff: a `staff_users` row keyed by their Firebase uid, plus `clinic_me
 - Alert on non-2xx from ops-worker `/health/canary`, once the line check is enabled.
 - Alert on non-2xx from ops-worker `/health/outbox`, which covers dead letters, overdue alerts and repeated failures. See the [runbook](outbox-dead-letter.md).
 - Alert on non-2xx from ops-worker `/health/replay`, which covers webhook events or tool requests that couldn't be processed. See the [runbook](replay-exhausted.md).
-- Heartbeat monitors: `WASSUP_OUTBOX_HEARTBEAT_URL`, `WASSUP_CANARY_HEARTBEAT_URL` and `WASSUP_REPLAY_HEARTBEAT_URL`.
+- Alert on non-2xx from ops-worker `/health/telephony`: the account is suspended or closed, the balance is below the floor, a line number is missing from the account, or the check is stale. This is the September 2026 outage, caught in minutes.
+- Heartbeat monitors: `WASSUP_OUTBOX_HEARTBEAT_URL`, `WASSUP_CANARY_HEARTBEAT_URL`, `WASSUP_REPLAY_HEARTBEAT_URL` and `WASSUP_TELEPHONY_HEARTBEAT_URL`.
 - These endpoints are unauthenticated but cached and single-flight: at most one database or provider query per probe every 15–60 s.
 
 ## 6. Daily line check

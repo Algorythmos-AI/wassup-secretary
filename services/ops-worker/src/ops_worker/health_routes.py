@@ -111,3 +111,14 @@ async def replay_health(request: Request) -> JSONResponse:
         return JSONResponse({"status": "unconfigured"}, status_code=503)
     report = await state.probes["replay"].get(state)
     return _respond(report, report["status"] == "failing")
+
+
+@router.get("/health/telephony", include_in_schema=False)
+async def telephony_health(request: Request) -> JSONResponse:
+    """The latest telephony account check (served from memory: this endpoint never calls the
+    provider). 503 when failing, stale, or not configured — an unwatched account is a risk."""
+    monitor = request.app.state.telephony
+    if monitor is None:
+        return JSONResponse({"status": "unconfigured"}, status_code=503)
+    report = monitor.report()
+    return _respond(report, report["status"] != "ok")

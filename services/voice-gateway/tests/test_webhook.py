@@ -21,7 +21,7 @@ from voice_gateway.signature import sign
 from wassup_core.db import make_engine
 from wassup_core.settings import Environment
 
-from tests.support.database import Seed
+from tests.support.database import Seed, line_check_running
 
 pytestmark = pytest.mark.db
 
@@ -230,6 +230,7 @@ async def test_synthetic_line_check_is_never_a_patient_call(
 ) -> None:
     inbound_leg = f"call_{uuid.uuid4().hex}"
     outbound_leg = f"call_{uuid.uuid4().hex}"
+    line_check_running(db_engine, "+61400000900", CLINIC_A_NUMBER)
     await _post(client, "call_analyzed", _call(inbound_leg, from_number="+61400000900"))
     await _post(client, "call_analyzed", _call(outbound_leg, direction="outbound"))
     for call_id in (inbound_leg, outbound_leg):
@@ -240,6 +241,22 @@ async def test_synthetic_line_check_is_never_a_patient_call(
             c=call_id,
         )
         assert raw["processed_at"] is not None
+
+
+async def test_spoofed_ai_line_caller_id_is_still_a_patient_call(
+    client: httpx.AsyncClient, db_engine: Engine
+) -> None:
+    """Caller ID showing one of our AI lines, with no line check running for that pair, is a real
+    caller (or someone spoofing): it must be stored, never silently dropped as synthetic."""
+    call_id = f"call_{uuid.uuid4().hex}"
+    await _post(
+        client,
+        "call_analyzed",
+        _call(
+            call_id, from_number="+61400000901", agent_id="agent_test_b", to_number=CLINIC_B_NUMBER
+        ),
+    )
+    assert _rows(db_engine, "SELECT id FROM calls WHERE provider_call_id = :c", c=call_id)
 
 
 async def test_invalid_json_is_400(client: httpx.AsyncClient) -> None:

@@ -20,7 +20,7 @@ from voice_gateway.signature import sign
 from wassup_core.db import make_engine
 from wassup_core.settings import Environment
 
-from tests.support.database import Seed, as_role
+from tests.support.database import Seed, as_role, line_check_running
 
 pytestmark = pytest.mark.db
 
@@ -202,7 +202,7 @@ async def test_url_slug_must_match_the_resolved_clinic(
             call_id=call_id,
             slug="test-clinic-b",
         )
-    assert response.json() == {"ok": True, "degraded": True}
+    assert response.json() == {"ok": False, "degraded": True}  # never claims it was saved
     assert _rows(db_engine, "SELECT id FROM messages WHERE provider_call_id = :c", c=call_id) == []
     assert _rows(
         db_engine, "SELECT id FROM quarantine_events WHERE reason LIKE 'tool_clinic_slug_mismatch%'"
@@ -301,6 +301,7 @@ async def test_budget_exceeded_returns_fallback(voice_engine: AsyncEngine) -> No
 
 async def test_synthetic_call_touches_nothing(voice_engine: AsyncEngine, db_engine: Engine) -> None:
     call_id = f"call_{uuid.uuid4().hex}"
+    line_check_running(db_engine, "+61400000900", NUMBER_A)
     async with _client(voice_engine) as client:
         response = await _tool(
             client,
@@ -310,10 +311,11 @@ async def test_synthetic_call_touches_nothing(voice_engine: AsyncEngine, db_engi
             from_number="+61400000900",
         )
     assert response.json() == {"ok": True, "synthetic": True}
-    assert (
-        _rows(db_engine, "SELECT id FROM tool_invocations WHERE provider_call_id = :c", c=call_id)
-        == []
-    )
+    for table in ("tool_invocations", "tool_requests_raw"):
+        assert (
+            _rows(db_engine, f"SELECT id FROM {table} WHERE provider_call_id = :c", c=call_id)  # noqa: S608
+            == []
+        )
 
 
 async def test_unknown_tool_and_bad_signature(voice_engine: AsyncEngine) -> None:
@@ -326,3 +328,39 @@ async def test_unknown_tool_and_bad_signature(voice_engine: AsyncEngine) -> None
             headers={"x-retell-signature": sign(body, "wrong", int(time.time() * 1000))},
         )
         assert bad.status_code == 401
+
+
+async def test_write_requests_are_kept_raw_and_lookups_are_not(
+    voice_engine: AsyncEngine, db_engine: Engine, patients: dict[str, uuid.UUID]
+) -> None:
+    call_id = f"call_{uuid.uuid4().hex}"
+    async with _client(voice_engine) as client:
+        await _tool(client, "capture_message", {"detail": "Please call back."}, call_id=call_id)
+        await _tool(
+            client,
+            "lookup_patient",
+            {"first_name": "Test", "last_name": "Patient", "date_of_birth": "1980-01-15"},
+            call_id=call_id,
+        )
+    rows = _rows(
+        db_engine,
+        "SELECT tool, outcome, completed_at FROM tool_requests_raw WHERE provider_call_id = :c",
+        c=call_id,
+    )
+    assert [(r["tool"], r["outcome"]) for r in rows] == [("capture_message", "done")]
+    assert rows[0]["completed_at"] is not None
+
+
+async def test_nul_characters_never_break_a_write(
+    voice_engine: AsyncEngine, db_engine: Engine
+) -> None:
+    call_id = f"call_{uuid.uuid4().hex}"
+    async with _client(voice_engine) as client:
+        response = await _tool(
+            client, "capture_message", {"detail": "Call me\u0000 back"}, call_id=call_id
+        )
+    assert response.json() == {"ok": True}
+    [message] = _rows(
+        db_engine, "SELECT detail FROM messages WHERE provider_call_id = :c", c=call_id
+    )
+    assert message["detail"] == "Call me back"

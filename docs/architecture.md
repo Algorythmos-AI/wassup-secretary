@@ -47,7 +47,7 @@ Web dashboard (React) — staging and production are separate projects
 |---|---|---|
 | 1 | Repo, CI, rulesets, workspace, service skeletons | done |
 | 2 | Database roles, tenancy schema, isolation tests, tenancy-aware DB layer | done |
-| 3 | ops-worker: outbox + urgent alerts, line-check canary, ingestion-gap check, monitor endpoints | done (canary awaits outbound telephony) |
+| 3 | ops-worker: outbox + urgent alerts, line-check canary, ingestion-gap check, replay of unfinished webhook events and tool requests, monitor endpoints | done (canary awaits outbound telephony) |
 | 4 | voice-gateway: signed ingestion, idempotent tools with budgets | done — per-clinic cutover pending infrastructure |
 | 5 | core-api: staff auth, calls API, workflow | done (API); dashboard UI still served by the legacy app |
 | 6 | Staging/production infrastructure, clinic cutover, legacy import, decommission | owner actions — see `docs/runbooks/go-live.md` |

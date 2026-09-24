@@ -34,7 +34,7 @@ DEFINER_ALLOWLIST = {
 # The only table the auditor role may touch (the per-clinic audit chain heads: hashes, no data).
 AUDITOR_TABLES = {"audit_chain_heads"}
 # Tables with clinic_id that are deliberately NOT under RLS (access limited by grants instead).
-NON_RLS_WITH_CLINIC = {"retell_events_raw", "audit_chain_heads"}
+NON_RLS_WITH_CLINIC = {"retell_events_raw", "audit_chain_heads", "tool_requests_raw"}
 
 
 def test_every_table_with_clinic_id_forces_rls(db_engine: Engine, seed: Seed) -> None:

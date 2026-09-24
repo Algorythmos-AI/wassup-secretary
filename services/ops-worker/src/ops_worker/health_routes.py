@@ -1,18 +1,77 @@
-"""Monitor endpoints. Counts, states and public line numbers only — never personal data."""
+"""Monitor endpoints. Counts, states and public line numbers only — never personal data.
+
+They are unauthenticated (monitors must reach them), so each is a cached, single-flight probe:
+however many requests arrive, the database and the voice provider see at most one query per
+probe per cache period.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import time
-from datetime import UTC, datetime
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from starlette.datastructures import State
 
-from ops_worker import canary, reconcile
+from ops_worker import canary, outbox, reconcile, replay
 
 router = APIRouter()
-_FRESHNESS_CACHE_S = 60.0
+
+Compute = Callable[[State], Awaitable[dict[str, Any]]]
+
+
+class CachedProbe:
+    """Serve a recent result; recompute at most once per ``ttl_s``, one caller at a time. An
+    exception is not cached, so a probe that fails (e.g. database down) is retried next time."""
+
+    def __init__(self, ttl_s: float, compute: Compute) -> None:
+        self.ttl_s = ttl_s
+        self.compute = compute
+        self._lock = asyncio.Lock()
+        self._value: dict[str, Any] | None = None
+        self._at = 0.0
+
+    async def get(self, state: State) -> dict[str, Any]:
+        async with self._lock:
+            if self._value is None or time.monotonic() - self._at > self.ttl_s:
+                self._value = await self.compute(state)
+                self._at = time.monotonic()
+            return self._value
+
+
+async def _canary(state: State) -> dict[str, Any]:
+    return await canary.status(state.engine, state.canary_config, datetime.now(UTC))
+
+
+async def _freshness(state: State) -> dict[str, Any]:
+    return await reconcile.ingestion_gap(
+        state.engine, state.retell, set(state.canary_config.lines), datetime.now(UTC)
+    )
+
+
+async def _outbox(state: State) -> dict[str, Any]:
+    return await outbox.health(state.engine, timedelta(minutes=10))
+
+
+async def _replay(state: State) -> dict[str, Any]:
+    return await replay.health(state.engine)
+
+
+def install_probes(state: State) -> None:
+    state.probes = {
+        "canary": CachedProbe(30.0, _canary),
+        "freshness": CachedProbe(60.0, _freshness),  # calls the voice provider's API
+        "outbox": CachedProbe(15.0, _outbox),
+        "replay": CachedProbe(15.0, _replay),
+    }
+
+
+def _respond(report: dict[str, Any], failing: bool) -> JSONResponse:
+    return JSONResponse(report, status_code=503 if failing else 200)
 
 
 @router.get("/health/canary", include_in_schema=False)
@@ -20,8 +79,8 @@ async def canary_health(request: Request) -> JSONResponse:
     state = request.app.state
     if state.engine is None:
         return JSONResponse({"status": "unconfigured"}, status_code=503)
-    report = await canary.status(state.engine, state.canary_config, datetime.now(UTC))
-    return JSONResponse(report, status_code=503 if report["status"] == "failing" else 200)
+    report = await state.probes["canary"].get(state)
+    return _respond(report, report["status"] == "failing")
 
 
 @router.get("/health/freshness", include_in_schema=False)
@@ -30,12 +89,25 @@ async def freshness_health(request: Request) -> JSONResponse:
     state = request.app.state
     if state.engine is None or state.retell is None:
         return JSONResponse({"ingestion": "unconfigured"}, status_code=503)
-    cached: tuple[float, dict[str, Any]] | None = getattr(state, "freshness_cache", None)
-    if cached is None or time.monotonic() - cached[0] > _FRESHNESS_CACHE_S:
-        report = await reconcile.ingestion_gap(
-            state.engine, state.retell, set(state.canary_config.lines), datetime.now(UTC)
-        )
-        cached = (time.monotonic(), report)
-        state.freshness_cache = cached
-    report = cached[1]
-    return JSONResponse(report, status_code=503 if report.get("ingestion") == "gap" else 200)
+    report = await state.probes["freshness"].get(state)
+    return _respond(report, report.get("ingestion") == "gap")
+
+
+@router.get("/health/outbox", include_in_schema=False)
+async def outbox_health(request: Request) -> JSONResponse:
+    """503 while anything is dead-lettered, overdue or failing repeatedly (alerts not going out)."""
+    state = request.app.state
+    if state.engine is None:
+        return JSONResponse({"status": "unconfigured"}, status_code=503)
+    report = await state.probes["outbox"].get(state)
+    return _respond(report, report["status"] == "failing")
+
+
+@router.get("/health/replay", include_in_schema=False)
+async def replay_health(request: Request) -> JSONResponse:
+    """503 while a stored webhook event or tool request could not be processed."""
+    state = request.app.state
+    if state.engine is None:
+        return JSONResponse({"status": "unconfigured"}, status_code=503)
+    report = await state.probes["replay"].get(state)
+    return _respond(report, report["status"] == "failing")

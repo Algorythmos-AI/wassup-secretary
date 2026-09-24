@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import random
 import time
@@ -308,3 +309,29 @@ async def test_ingestion_gap_detects_missing_calls(ops_engine: AsyncEngine, seed
         ops_engine, FakeRetell(calls[:1]), set(), datetime.now(UTC)
     )
     assert healthy["ingestion"] == "ok"
+
+
+@pytest.mark.db
+async def test_freshness_probe_is_single_flight_and_cached(ops_engine: AsyncEngine) -> None:
+    """The endpoint is unauthenticated: a burst of requests must reach the provider once."""
+
+    class CountingRetell(FakeRetell):
+        def __init__(self) -> None:
+            super().__init__()
+            self.list_calls_count = 0
+
+        async def list_calls(self, agent_ids: list[str], limit: int) -> list[dict[str, Any]]:
+            self.list_calls_count += 1
+            await asyncio.sleep(0.05)  # a slow provider makes concurrent requests overlap
+            return []
+
+    retell = CountingRetell()
+    settings = OpsWorkerSettings(environment=Environment.TEST, scheduler_enabled=False)
+    app = build_ops_app(settings, engine=ops_engine, retell=retell)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        responses = await asyncio.gather(*(client.get("/health/freshness") for _ in range(20)))
+        responses.append(await client.get("/health/freshness"))
+    assert {r.status_code for r in responses} == {200}
+    assert retell.list_calls_count == 1

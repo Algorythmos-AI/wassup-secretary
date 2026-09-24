@@ -7,8 +7,12 @@ Guarantees (ADR 0004):
 - Exactly-once: the invocation is claimed in ``tool_invocations`` (unique dedupe key) inside the
   same transaction as the tool's writes, so a retry — even a concurrent one — returns the stored
   result instead of writing twice.
+- Nothing said is lost: a write tool's request is committed to ``tool_requests_raw`` before the
+  tool runs. If the tool then fails or runs out of time, ops-worker replays the request later
+  (exactly-once, through the same dedupe key).
 - A hard time budget: on timeout or database trouble the caller hears the tool's fallback line
-  instead of dead air.
+  instead of dead air. A write tool's fallback says ``ok: false`` — the agent must never tell a
+  caller their message was passed on when it wasn't saved (see docs/voice-tools.md).
 """
 
 from __future__ import annotations
@@ -35,7 +39,6 @@ from wassup_core.logging import get_logger
 from voice_gateway import store
 from voice_gateway.settings import VoiceGatewaySettings
 from voice_gateway.signature import verify
-from voice_gateway.webhook import is_synthetic
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -149,15 +152,20 @@ class ToolSpec:
     args_model: type[BaseModel]
     handler: Callable[[ToolContext, Any], Awaitable[dict[str, Any]]]
     fallback: dict[str, Any]
+    # Write tools keep the raw request for replay. Lookups don't: a name and date of birth are
+    # not stored just in case, and a lookup after the call has ended helps nobody.
+    replayable: bool
 
+
+# The fallback is what the caller effectively hears when the tool can't finish in time. It must be
+# true: "not saved" for writes, "no match" for a lookup.
+_NOT_SAVED = {"ok": False, "degraded": True}
 
 TOOLS: dict[str, ToolSpec] = {
-    "capture_message": ToolSpec(
-        CaptureMessageArgs, capture_message, {"ok": True, "degraded": True}
-    ),
-    "create_promise": ToolSpec(CreatePromiseArgs, create_promise, {"ok": True, "degraded": True}),
+    "capture_message": ToolSpec(CaptureMessageArgs, capture_message, _NOT_SAVED, replayable=True),
+    "create_promise": ToolSpec(CreatePromiseArgs, create_promise, _NOT_SAVED, replayable=True),
     "lookup_patient": ToolSpec(
-        LookupPatientArgs, lookup_patient, {"matched": False, "degraded": True}
+        LookupPatientArgs, lookup_patient, {"matched": False, "degraded": True}, replayable=False
     ),
 }
 
@@ -177,21 +185,42 @@ async def _invoke(
     raw_args: dict[str, Any],
     parsed_args: BaseModel,
     payload: dict[str, Any],
+    ai_lines: frozenset[str],
 ) -> dict[str, Any]:
     call_id = str(call["call_id"])
     agent_id = call.get("agent_id") if isinstance(call.get("agent_id"), str) else None
     to_number = call.get("to_number") if isinstance(call.get("to_number"), str) else None
+    key = dedupe_key(call_id, tool, raw_args)
 
+    # 1. Synthetic line checks touch nothing. Otherwise commit the raw request before anything
+    #    else can fail (its own transaction, so a later failure can't roll it back).
+    async with unscoped(engine) as conn:
+        if await store.is_synthetic(conn, call, ai_lines):
+            return {"ok": True, "synthetic": True}
+        if spec.replayable:
+            await store.store_tool_request(
+                conn,
+                dedupe_key=key,
+                tool=tool,
+                clinic_slug=clinic_slug,
+                call_id=call_id,
+                agent_id=agent_id,
+                payload=payload,
+            )
+
+    # 2. Which clinic? From the signed agent and the dialled number only.
     async with unscoped(engine) as conn:
         clinic_id = await store.resolve_clinic(conn, agent_id, to_number)
         if clinic_id is None:
             await store.quarantine(conn, f"tool_unknown_agent_or_number:{tool}", agent_id, payload)
+            if spec.replayable:
+                await store.complete_tool_request(conn, key, "quarantined")
             log.error(
                 "tool_quarantined", tool=tool, call_id=call_id, reason="unknown_agent_or_number"
             )
             return spec.fallback
 
-    key = dedupe_key(call_id, tool, raw_args)
+    # 3. The tool's work, the exactly-once claim and the raw request's completion: one transaction.
     started = time.perf_counter()
     async with clinic_scope(engine, [clinic_id]) as conn:
         slug = (
@@ -203,6 +232,8 @@ async def _invoke(
                 await store.quarantine(
                     qconn, f"tool_clinic_slug_mismatch:{tool}", agent_id, payload
                 )
+                if spec.replayable:
+                    await store.complete_tool_request(qconn, key, "clinic_slug_mismatch")
             return spec.fallback
         claimed = await conn.execute(
             text(
@@ -221,6 +252,8 @@ async def _invoke(
                 text("SELECT result FROM tool_invocations WHERE dedupe_key = :key"), {"key": key}
             )
             result = stored.scalar()
+            if spec.replayable:
+                await store.complete_tool_request(conn, key, "duplicate", clinic_id)
             log.info("tool_replayed", tool=tool, call_id=call_id)
             return dict(result) if isinstance(result, dict) else spec.fallback
         result = await spec.handler(ToolContext(conn, clinic_id, call_id, key), parsed_args)
@@ -234,6 +267,8 @@ async def _invoke(
                 "id": invocation_id,
             },
         )
+        if spec.replayable:
+            await store.complete_tool_request(conn, key, "done", clinic_id)
     log.info("tool_completed", tool=tool, call_id=call_id, clinic_id=str(clinic_id))
     return result
 
@@ -249,7 +284,7 @@ async def retell_tool(request: Request, clinic_slug: str, tool: str) -> JSONResp
     if spec is None:
         return problem(404, "Unknown tool", "unknown_tool")
     try:
-        payload: Any = json.loads(raw)
+        payload: Any = store.strip_nul(json.loads(raw))
         call = payload["call"]
         raw_args = payload.get("args") or {}
         if (
@@ -261,8 +296,6 @@ async def retell_tool(request: Request, clinic_slug: str, tool: str) -> JSONResp
     except (ValueError, KeyError, TypeError):
         return problem(400, "Invalid tool call", "invalid_tool_call")
 
-    if is_synthetic(call, settings.ai_lines):
-        return JSONResponse({"ok": True, "synthetic": True})
     try:
         parsed_args = spec.args_model.model_validate(raw_args)
     except ValidationError:
@@ -279,6 +312,7 @@ async def retell_tool(request: Request, clinic_slug: str, tool: str) -> JSONResp
                 raw_args=raw_args,
                 parsed_args=parsed_args,
                 payload=payload,
+                ai_lines=settings.ai_lines,
             )
     except TimeoutError:
         log.error("tool_degraded", tool=tool, call_id=call["call_id"], reason="timeout")

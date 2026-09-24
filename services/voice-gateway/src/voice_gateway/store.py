@@ -176,3 +176,25 @@ async def enqueue(
             "payload": json.dumps(payload),
         },
     )
+
+
+async def record_canary_receipt(conn: AsyncConnection, to_number: str | None) -> bool:
+    """A synthetic inbound call arrived: mark the newest open line-check run for that line."""
+    if not to_number:
+        return False
+    row = await conn.execute(
+        text(
+            """
+            UPDATE canary_runs
+            SET received_at = now(), status = CASE WHEN status = 'failed' THEN 'late' ELSE 'received' END
+            WHERE id = (
+              SELECT id FROM canary_runs
+              WHERE to_number = :to AND received_at IS NULL AND placed_at IS NOT NULL
+              ORDER BY placed_at DESC LIMIT 1
+            )
+            RETURNING id
+            """
+        ),
+        {"to": to_number},
+    )
+    return row.scalar() is not None

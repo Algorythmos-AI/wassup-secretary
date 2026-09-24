@@ -17,6 +17,8 @@ class VoiceGatewaySettings(BaseServiceSettings):
     db_pool_size: int = 5
     db_pool_timeout_s: float = 0.3
     db_statement_timeout_ms: int = 1000
+    # Hard budget for a voice tool call; past it the caller hears the tool's fallback line.
+    tool_budget_ms: int = 1500
 
     @property
     def retell_keys(self) -> list[str]:

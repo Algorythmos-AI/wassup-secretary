@@ -813,6 +813,7 @@ version = "0.1.0"
 source = { editable = "services/ops-worker" }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "wassup-core" },
 ]
@@ -820,6 +821,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "wassup-core", editable = "libs/wassup_core" },
 ]

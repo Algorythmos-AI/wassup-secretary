@@ -44,6 +44,7 @@ ALLOWED_KEYS: frozenset[str] = frozenset(
         "clinic_id",
         "call_id",
         "event_type",
+        "event_id",
         "tool",
         "dedupe_key",
         "agent_id",

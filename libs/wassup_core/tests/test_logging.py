@@ -67,3 +67,17 @@ def test_library_tracebacks_are_redacted_too(capsys: pytest.CaptureFixture[str])
     assert record["event"] == "Exception in ASGI application"
     assert "builtins.RuntimeError" in record["exception"]
     structlog.reset_defaults()
+
+
+def test_uvicorn_access_log_stays_off_even_after_configuring() -> None:
+    """uvicorn writes access lines (full URL, query string, client address) whenever its access
+    logger has handlers; configuring our logging must never give it any."""
+    import logging as std_logging  # noqa: PLC0415
+
+    from wassup_core.logging import configure_logging  # noqa: PLC0415
+
+    configure_logging("test-service")
+    access = std_logging.getLogger("uvicorn.access")
+    assert not access.hasHandlers() or access.disabled
+    assert access.propagate is False
+    assert std_logging.getLogger("uvicorn.error").propagate is True  # startup/errors still flow

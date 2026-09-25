@@ -135,10 +135,18 @@ def configure_logging(service: str, level: str = "INFO") -> None:
     root.handlers = [handler]
     root.setLevel(level_name)
     # uvicorn installs its own handlers (plain-text tracebacks); route it through ours instead.
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    for name in ("uvicorn", "uvicorn.error"):
         uvicorn_logger = logging.getLogger(name)
         uvicorn_logger.handlers.clear()
         uvicorn_logger.propagate = True
+    # uvicorn's access log is never wanted: it prints full URLs (query strings included) and
+    # client addresses, and our own request log records what we need. uvicorn decides whether
+    # to write it by asking whether this logger has handlers, so it must have none and must not
+    # propagate to ours, whatever --no-access-log says.
+    access = logging.getLogger("uvicorn.access")
+    access.handlers.clear()
+    access.propagate = False
+    access.disabled = True
     for name in _QUIET_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
 

@@ -160,19 +160,37 @@ async def test_urgent_message_queues_an_alert_event(
 ) -> None:
     call_id = f"call_{uuid.uuid4().hex}"
     async with _client(voice_engine) as client:
+        # The category is free text from the agent: urgency comes from the flag, not the word.
         await _tool(
             client,
             "capture_message",
-            {"category": "urgent", "detail": "Test urgent message.", "urgent": True},
+            {"category": "post_op", "detail": "Test urgent message.", "urgent": True},
             call_id=call_id,
         )
+        await _tool(
+            client,
+            "capture_message",
+            {"category": "general", "detail": "Test routine message."},
+            call_id=call_id,
+        )
+    stored = _rows(
+        db_engine,
+        "SELECT detail, urgent FROM messages WHERE provider_call_id = :c ORDER BY detail",
+        c=call_id,
+    )
+    assert [(m["detail"], m["urgent"]) for m in stored] == [
+        ("Test routine message.", False),
+        ("Test urgent message.", True),
+    ]
     events = _rows(
         db_engine,
-        "SELECT event_type, payload FROM outbox_events WHERE payload->>'call' = :c",
+        "SELECT event_type, payload FROM outbox_events WHERE payload->>'call' = :c "
+        "ORDER BY event_type",
         c=call_id,
     )
     assert [(e["event_type"], e["payload"]) for e in events] == [
-        ("message.urgent", {"call": call_id})
+        ("message.captured", {"call": call_id}),
+        ("message.urgent", {"call": call_id}),
     ]
 
 

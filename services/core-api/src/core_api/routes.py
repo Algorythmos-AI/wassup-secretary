@@ -95,21 +95,33 @@ async def me(staff: StaffDep, request: Request) -> dict[str, Any]:
     }
 
 
+# has_urgent_message: did the caller leave a message the voice agent flagged urgent? (Served by
+# the partial index from migration 0009; written out in each statement to keep them literal.)
 _LIST_SELECT = (
     "SELECT id, started_at, from_number, duration_seconds, summary, intent, workflow_status, "
-    "is_priority, is_reception_action, version FROM calls WHERE clinic_id = :c "
+    "is_priority, is_reception_action, version, "
+    "EXISTS (SELECT 1 FROM messages m WHERE m.clinic_id = calls.clinic_id "
+    "AND m.provider_call_id = calls.provider_call_id AND m.urgent) AS has_urgent_message "
+    "FROM calls WHERE clinic_id = :c "
 )
+_OPEN_ONLY = "AND workflow_status IN ('pending', 'following_up') "
 _LIST_ORDER = " ORDER BY started_at DESC NULLS LAST, id DESC LIMIT :limit"
+_AFTER_DATED_SQL = "AND ((started_at, id) < (:started, :last_id) OR started_at IS NULL)"
+_AFTER_UNDATED_SQL = "AND started_at IS NULL AND id < :last_id"
 # Keyset pagination on (started_at DESC NULLS LAST, id DESC) — stable under concurrent inserts.
-# Three fixed statements (no SQL assembled at runtime). Rows without a start time sort last, and a
+# Fixed statements (no SQL assembled per request). Rows without a start time sort last, and a
 # comparison with NULL is never true, so they are admitted explicitly once dated rows run out.
-_FIRST_PAGE = text(_LIST_SELECT + _LIST_ORDER)
-_AFTER_DATED = text(
-    _LIST_SELECT
-    + "AND ((started_at, id) < (:started, :last_id) OR started_at IS NULL)"
-    + _LIST_ORDER
-)
-_AFTER_UNDATED = text(_LIST_SELECT + "AND started_at IS NULL AND id < :last_id" + _LIST_ORDER)
+# Keyed by (open_only, cursor kind).
+_LIST = {
+    (open_only, kind): text(
+        _LIST_SELECT
+        + (_OPEN_ONLY if open_only else "")
+        + {"first": "", "dated": _AFTER_DATED_SQL, "undated": _AFTER_UNDATED_SQL}[kind]
+        + _LIST_ORDER
+    )
+    for open_only in (False, True)
+    for kind in ("first", "dated", "undated")
+}
 
 
 @router.get("/clinics/{clinic_id}/calls", response_model=CallPage)
@@ -117,16 +129,21 @@ async def list_calls(
     clinic_id: uuid.UUID,
     staff: StaffDep,
     request: Request,
+    *,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
+    open_only: Annotated[
+        bool, Query(description="Only calls still to do (pending or following up)")
+    ] = False,
 ) -> dict[str, Any]:
     staff.require(clinic_id)
     params: dict[str, Any] = {"c": clinic_id, "limit": limit + 1}
-    statement = _FIRST_PAGE
+    kind = "first"
     if cursor:
         started, last_id = _decode_cursor(cursor)
         params.update({"started": started, "last_id": last_id})
-        statement = _AFTER_DATED if started else _AFTER_UNDATED
+        kind = "dated" if started else "undated"
+    statement = _LIST[(open_only, kind)]
     async with clinic_scope(_engine(request), [clinic_id]) as conn:
         rows = (await conn.execute(statement, params)).mappings().all()
         page = [dict(r) for r in rows[:limit]]
@@ -151,9 +168,16 @@ _DETAIL = text(
     SELECT id, provider_call_id, direction, from_number, to_number, started_at, ended_at,
            duration_seconds, cost_usd::text AS cost_usd, disconnection_reason, summary, transcript,
            sentiment, intent, is_priority, is_reception_action, local_date, local_hour,
-           workflow_status, version, analyzed_at
-    FROM calls WHERE id = :id
+           workflow_status, version, analyzed_at,
+           EXISTS (SELECT 1 FROM messages m WHERE m.clinic_id = calls.clinic_id
+                   AND m.provider_call_id = calls.provider_call_id AND m.urgent)
+             AS has_urgent_message
+    FROM calls WHERE id = :id AND clinic_id = :c
     """
+)
+_MESSAGES = text(
+    "SELECT category, detail, callback_number, urgent, created_at FROM messages "
+    "WHERE clinic_id = :c AND provider_call_id = :p ORDER BY created_at"
 )
 
 
@@ -163,18 +187,11 @@ async def call_detail(
 ) -> dict[str, Any]:
     staff.require(clinic_id)
     async with clinic_scope(_engine(request), [clinic_id]) as conn:
-        call = (await conn.execute(_DETAIL, {"id": call_id})).mappings().first()
+        call = (await conn.execute(_DETAIL, {"id": call_id, "c": clinic_id})).mappings().first()
         if call is None:
             raise HTTPException(status_code=404, detail="Not found")
         messages = (
-            (
-                await conn.execute(
-                    text(
-                        "SELECT category, detail, callback_number, created_at FROM messages WHERE provider_call_id = :p ORDER BY created_at"
-                    ),
-                    {"p": call["provider_call_id"]},
-                )
-            )
+            (await conn.execute(_MESSAGES, {"c": clinic_id, "p": call["provider_call_id"]}))
             .mappings()
             .all()
         )
@@ -182,9 +199,10 @@ async def call_detail(
             (
                 await conn.execute(
                     text(
-                        "SELECT action_type, status_from, status_to, note, created_at FROM call_interactions WHERE call_id = :id ORDER BY created_at"
+                        "SELECT action_type, status_from, status_to, note, created_at FROM call_interactions "
+                        "WHERE clinic_id = :c AND call_id = :id ORDER BY created_at"
                     ),
-                    {"id": call_id},
+                    {"id": call_id, "c": clinic_id},
                 )
             )
             .mappings()

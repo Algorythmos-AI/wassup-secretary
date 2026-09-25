@@ -227,6 +227,11 @@
             ],
             "title": "From Number"
           },
+          "has_urgent_message": {
+            "description": "The caller left a message the voice agent flagged as urgent",
+            "title": "Has Urgent Message",
+            "type": "boolean"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -361,6 +366,7 @@
           "workflow_status",
           "is_priority",
           "is_reception_action",
+          "has_urgent_message",
           "version",
           "provider_call_id",
           "direction",
@@ -401,6 +407,11 @@
               }
             ],
             "title": "From Number"
+          },
+          "has_urgent_message": {
+            "description": "The caller left a message the voice agent flagged as urgent",
+            "title": "Has Urgent Message",
+            "type": "boolean"
           },
           "id": {
             "format": "uuid",
@@ -474,6 +485,7 @@
           "workflow_status",
           "is_priority",
           "is_reception_action",
+          "has_urgent_message",
           "version"
         ],
         "title": "CallSummary",
@@ -505,12 +517,17 @@
             "description": "What the caller said. Plain text; never render as HTML.",
             "title": "Detail",
             "type": "string"
+          },
+          "urgent": {
+            "title": "Urgent",
+            "type": "boolean"
           }
         },
         "required": [
           "category",
           "detail",
           "callback_number",
+          "urgent",
           "created_at"
         ],
         "title": "CapturedMessage",
@@ -1081,6 +1098,18 @@
                 }
               ],
               "title": "Cursor"
+            }
+          },
+          {
+            "description": "Only calls still to do (pending or following up)",
+            "in": "query",
+            "name": "open_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Only calls still to do (pending or following up)",
+              "title": "Open Only",
+              "type": "boolean"
             }
           }
         ],

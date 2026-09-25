@@ -36,7 +36,12 @@ def _load() -> ModuleType:
 
 
 tool = _load()
-V1 = json.dumps({"tiers": [{"level": "priority_1", "reason": "Clinical", "any": ["swelling"]}]})
+V1 = json.dumps(
+    {
+        "route_levels": {"book": "priority_3"},
+        "tiers": [{"level": "priority_1", "reason": "Clinical", "any": ["swelling"]}],
+    }
+)
 V2 = json.dumps({"tiers": [{"level": "priority_3", "reason": "Routine", "any": ["swelling"]}]})
 MAX_VERSION = "SELECT coalesce(max(version), 0) FROM clinic_classifier_rules WHERE clinic_id = :c"
 RULE_ROWS = "SELECT count(*) FROM clinic_classifier_rules WHERE clinic_id = :c"
@@ -59,16 +64,18 @@ def _slug(db_engine: Engine, clinic: uuid.UUID) -> str:
     return str(_scalar(db_engine, "SELECT slug FROM clinics WHERE id = :c", clinic))
 
 
-def _add_call(db_engine: Engine, clinic: uuid.UUID, summary: str) -> uuid.UUID:
+def _add_call(
+    db_engine: Engine, clinic: uuid.UUID, summary: str, route: str | None = None
+) -> uuid.UUID:
     call_id = uuid.uuid4()
     with db_engine.connect() as conn, conn.begin():
         as_role(conn, "wassup_owner", [clinic])
         conn.execute(
             text(
-                "INSERT INTO calls (id, clinic_id, provider_call_id, direction, summary, analyzed_at) "
-                "VALUES (:id, :c, :p, 'inbound', :s, now())"
+                "INSERT INTO calls (id, clinic_id, provider_call_id, direction, summary, "
+                "triage_route, analyzed_at) VALUES (:id, :c, :p, 'inbound', :s, :r, now())"
             ),
-            {"id": call_id, "c": clinic, "p": f"call_{call_id.hex}", "s": summary},
+            {"id": call_id, "c": clinic, "p": f"call_{call_id.hex}", "s": summary, "r": route},
         )
     return call_id
 
@@ -89,6 +96,7 @@ def test_load_activate_reclassify_and_roll_back(db_engine: Engine, seed: Seed) -
     base = int(_scalar(db_engine, MAX_VERSION, clinic))
     audits_before = int(_scalar(db_engine, AUDITS, clinic))
     swollen = _add_call(db_engine, clinic, "swelling after surgery")
+    routed = _add_call(db_engine, clinic, "swelling after surgery", route="book")  # route wins
     other = _add_call(db_engine, seed.clinic_b, "swelling after surgery")  # untouched
     with _conn(db_engine) as conn:
         assert tool.load(conn, slug, V1, "first", activate=False) == base + 1
@@ -97,6 +105,7 @@ def test_load_activate_reclassify_and_roll_back(db_engine: Engine, seed: Seed) -
         totals = tool.reclassify(conn, slug)
     assert totals["changed"] >= 1 and totals["clinics"] == 1
     assert _level(db_engine, swollen) == ("priority_1", True, base + 1)
+    assert _level(db_engine, routed) == ("priority_3", False, base + 1)
     assert _level(db_engine, other) == (None, False, None)
 
     with _conn(db_engine) as conn:

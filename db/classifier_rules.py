@@ -34,8 +34,8 @@ from psycopg.rows import dict_row
 from wassup_core.classify import CallFacts, RuleSet, classify
 
 _CALLS = """
-    SELECT id, summary, transcript, intent, sentiment, priority_level, is_priority,
-           is_reception_action, action_label, classifier_version
+    SELECT id, summary, transcript, intent, sentiment, triage_route, call_successful,
+           priority_level, is_priority, is_reception_action, action_label, classifier_version
     FROM calls WHERE clinic_id = %(c)s AND analyzed_at IS NOT NULL ORDER BY id
 """
 _UPDATE = """
@@ -146,6 +146,8 @@ def reclassify(conn: psycopg.Connection[Any], slug: str | None) -> dict[str, int
                         transcript=row["transcript"],
                         intent=row["intent"],
                         sentiment=row["sentiment"],
+                        triage_route=row["triage_route"],
+                        call_successful=row["call_successful"],
                     ),
                     rules,
                 )

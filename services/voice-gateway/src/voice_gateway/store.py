@@ -185,13 +185,14 @@ _UPSERT_CALL = text(
     INSERT INTO calls (
       clinic_id, provider_call_id, direction, from_number, to_number, started_at, ended_at,
       duration_seconds, cost_usd, disconnection_reason, summary, transcript, sentiment, intent,
-      local_date, local_hour, local_dow, source, analyzed_at,
+      local_date, local_hour, local_dow, source, analyzed_at, triage_route, call_successful,
       is_priority, is_reception_action, priority_level, priority_reason, action_label,
       classified_at, classifier_version
     ) VALUES (
       :clinic_id, :provider_call_id, :direction, :from_number, :to_number, :started_at, :ended_at,
       :duration_seconds, :cost_usd, :disconnection_reason, :summary, :transcript, :sentiment, :intent,
       :local_date, :local_hour, :local_dow, 'webhook', CASE WHEN CAST(:analyzed AS boolean) THEN now() END,
+      CAST(:triage_route AS text), CAST(:call_successful AS boolean),
       COALESCE(CAST(:is_priority AS boolean), false), COALESCE(CAST(:is_reception_action AS boolean), false),
       CAST(:priority_level AS text), CAST(:priority_reason AS text), CAST(:action_label AS text),
       CASE WHEN CAST(:priority_level AS text) IS NULL THEN NULL ELSE now() END,
@@ -212,6 +213,8 @@ _UPSERT_CALL = text(
       summary   = CASE WHEN CAST(:analyzed AS boolean) THEN EXCLUDED.summary   ELSE calls.summary END,
       sentiment = CASE WHEN CAST(:analyzed AS boolean) THEN EXCLUDED.sentiment ELSE calls.sentiment END,
       intent    = CASE WHEN CAST(:analyzed AS boolean) THEN EXCLUDED.intent    ELSE calls.intent END,
+      triage_route    = CASE WHEN CAST(:analyzed AS boolean) THEN EXCLUDED.triage_route    ELSE calls.triage_route END,
+      call_successful = CASE WHEN CAST(:analyzed AS boolean) THEN EXCLUDED.call_successful ELSE calls.call_successful END,
       analyzed_at = CASE WHEN CAST(:analyzed AS boolean) THEN now() ELSE calls.analyzed_at END,
       is_priority = CASE WHEN CAST(:priority_level AS text) IS NULL THEN calls.is_priority ELSE CAST(:is_priority AS boolean) END,
       is_reception_action = CASE WHEN CAST(:priority_level AS text) IS NULL THEN calls.is_reception_action ELSE CAST(:is_reception_action AS boolean) END,
@@ -261,6 +264,8 @@ async def upsert_call(
             "transcript": record.transcript,
             "sentiment": record.sentiment,
             "intent": record.intent,
+            "triage_route": record.triage_route,
+            "call_successful": record.call_successful,
             "local_date": local_date,
             "local_hour": local_hour,
             "local_dow": local_dow,

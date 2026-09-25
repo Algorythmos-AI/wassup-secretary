@@ -43,6 +43,10 @@ CREATE POLICY clinic_classifier_rules_clinic_isolation ON clinic_classifier_rule
 GRANT SELECT ON clinic_classifier_rules TO app_voice, app_core, app_ops;
 
 ALTER TABLE calls
+  -- The agent's own routing decision and the provider's success judgement: inputs to the
+  -- classifier that must be kept, so a later reclassification sees what the webhook saw.
+  ADD COLUMN triage_route text CHECK (char_length(triage_route) <= 60),
+  ADD COLUMN call_successful boolean,
   ADD COLUMN priority_level text
     CHECK (priority_level IN ('emergency','priority_1','priority_2','priority_3','none')),
   ADD COLUMN priority_reason text CHECK (char_length(priority_reason) <= 60),

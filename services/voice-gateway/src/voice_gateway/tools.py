@@ -75,8 +75,9 @@ class LookupPatientArgs(BaseModel):
 async def capture_message(ctx: ToolContext, args: CaptureMessageArgs) -> dict[str, Any]:
     await ctx.conn.execute(
         text(
-            "INSERT INTO messages (clinic_id, provider_call_id, category, detail, callback_number, dedupe_key) "
-            "VALUES (:clinic_id, :call_id, :category, :detail, :callback, :dedupe)"
+            "INSERT INTO messages "
+            "(clinic_id, provider_call_id, category, detail, callback_number, urgent, dedupe_key) "
+            "VALUES (:clinic_id, :call_id, :category, :detail, :callback, :urgent, :dedupe)"
         ),
         {
             "clinic_id": ctx.clinic_id,
@@ -84,6 +85,7 @@ async def capture_message(ctx: ToolContext, args: CaptureMessageArgs) -> dict[st
             "category": args.category,
             "detail": args.detail,
             "callback": args.callback_number,
+            "urgent": args.urgent,
             "dedupe": ctx.dedupe_key,
         },
     )

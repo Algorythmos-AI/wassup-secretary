@@ -41,6 +41,9 @@ class CallSummary(BaseModel):
     workflow_status: WorkflowStatus
     is_priority: bool
     is_reception_action: bool
+    has_urgent_message: bool = Field(
+        description="The caller left a message the voice agent flagged as urgent"
+    )
     version: int
 
 
@@ -69,6 +72,7 @@ class CapturedMessage(BaseModel):
     category: str
     detail: str = Field(description="What the caller said. Plain text; never render as HTML.")
     callback_number: str | None
+    urgent: bool
     created_at: datetime
 
 

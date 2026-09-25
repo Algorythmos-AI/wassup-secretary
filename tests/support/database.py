@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,8 +39,10 @@ def _sqlalchemy_url(url: str) -> str:
     )
 
 
-@pytest.fixture(scope="session")
-def db_engine() -> Iterator[Engine]:
+@contextmanager
+def migrated_database(revision: str = "head") -> Iterator[Engine]:
+    """A fresh database with roles and grants, migrated to ``revision`` as the migrator; dropped
+    afterwards. Yields a superuser engine with real (non-autocommit) transactions."""
     if not ADMIN_URL:
         pytest.skip("TEST_DATABASE_ADMIN_URL not set (tenancy tests need a disposable Postgres)")
     admin_url = make_url(_sqlalchemy_url(ADMIN_URL))
@@ -67,12 +70,7 @@ def db_engine() -> Iterator[Engine]:
                 .replace(':"dbname"', f'"{db_name}"')
             )
             raw.execute(grants)
-        # Migrate exactly as production does: a transactional connection, as the migrator.
-        with test_engine.connect() as conn:
-            conn.execute(text("SET SESSION AUTHORIZATION wassup_migrator"))
-            upgrade(conn, "head")
-            conn.execute(text("RESET SESSION AUTHORIZATION"))
-            conn.commit()
+        migrate(test_engine, revision)
         yield test_engine
     finally:
         test_engine.dispose()
@@ -80,6 +78,21 @@ def db_engine() -> Iterator[Engine]:
         with admin.connect() as conn:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'))
         admin.dispose()
+
+
+def migrate(engine: Engine, revision: str = "head") -> None:
+    """Migrate exactly as production does: a transactional connection, as the migrator."""
+    with engine.connect() as conn:
+        conn.execute(text("SET SESSION AUTHORIZATION wassup_migrator"))
+        upgrade(conn, revision)
+        conn.execute(text("RESET SESSION AUTHORIZATION"))
+        conn.commit()
+
+
+@pytest.fixture(scope="session")
+def db_engine() -> Iterator[Engine]:
+    with migrated_database() as engine:
+        yield engine
 
 
 def upgrade(conn: Connection, revision: str, script_location: Path | None = None) -> None:

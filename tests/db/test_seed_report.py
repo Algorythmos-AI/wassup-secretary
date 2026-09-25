@@ -6,6 +6,8 @@ import importlib.util
 from types import ModuleType
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -62,5 +64,6 @@ def test_report_prints_counts_only(
     monkeypatch.setenv("WASSUP_ADMIN_DATABASE_URL", db_url)
     assert report.main() == 0
     out = capsys.readouterr().out
-    assert "schema_revision: 0008" in out and "calls:" in out
+    head = ScriptDirectory.from_config(Config(str(ROOT / "db" / "alembic.ini"))).get_current_head()
+    assert f"schema_revision: {head}" in out and "calls:" in out
     assert "@" not in out  # no emails, names or other personal values

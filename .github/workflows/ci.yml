@@ -79,10 +79,50 @@ jobs:
           for i in $(seq 1 30); do curl -fsS localhost:8080/health && exit 0; sleep 1; done
           docker logs svc; exit 1
 
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - name: Generated API types (src/api/schema.d.ts) match the contract
+        run: npm run api:check
+      - name: Build the image and check it serves the app with its security headers
+        working-directory: .
+        run: |
+          docker build -f apps/web/Dockerfile \
+            --build-arg VITE_API_BASE=https://api.example.test \
+            --build-arg VITE_FIREBASE_AUTH_DOMAIN=auth.example.test \
+            -t wassup-web:ci .
+          docker run -d --name web -p 8080:8080 \
+            -e VITE_API_BASE=https://api.example.test -e VITE_FIREBASE_AUTH_DOMAIN=auth.example.test wassup-web:ci
+          for _ in $(seq 1 20); do curl -fsS -o /dev/null localhost:8080/ && break; sleep 1; done
+          headers="$(curl -fsSI localhost:8080/c/any/inbox)"
+          echo "$headers"
+          grep -qi '^content-type: text/html' <<<"$headers"
+          grep -qi "^content-security-policy: .*connect-src 'self' https://api.example.test" <<<"$headers"
+          grep -qi "frame-src https://auth.example.test" <<<"$headers"
+          grep -qi '^x-frame-options: DENY' <<<"$headers"
+          grep -qi '^strict-transport-security: ' <<<"$headers"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/assets/missing.js)" = 404
+          if docker run --rm --entrypoint sh wassup-web:ci -c 'grep -rlq sourceMappingURL /srv'; then
+            echo "source maps must not ship" >&2; exit 1
+          fi
+
   # The single required check: reports on every run, fails if any job failed or was cancelled.
   ci-gate:
     if: always()
-    needs: [lint, typecheck, test, image]
+    needs: [lint, typecheck, test, image, web]
     runs-on: ubuntu-24.04
     steps:
       - name: All CI jobs passed

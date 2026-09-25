@@ -1,0 +1,136 @@
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail) 1fr;
+  min-height: 100vh;
+}
+
+.rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 22px 16px;
+  background: var(--ink);
+  color: #dfe7f0;
+}
+
+.rail__brand {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.rail__product {
+  font-family: var(--font-cond);
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: 0.02em;
+  color: #fff;
+}
+.rail__subtitle {
+  font-size: 13px;
+  color: #9fb0c5;
+}
+
+.rail__clinic select,
+.rail__clinic--single {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid #34465f;
+  background: #22334d;
+  color: #fff;
+  font-weight: 500;
+}
+
+.rail__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rail__nav a {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  color: #c9d5e3;
+  text-decoration: none;
+  font-weight: 500;
+}
+.rail__nav a:hover {
+  background: #22334d;
+  color: #fff;
+}
+.rail__nav a.active {
+  background: #fff;
+  color: var(--ink);
+}
+
+.rail__account {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.rail__email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #9fb0c5;
+}
+.rail__signout {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #fff;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.shell__main {
+  min-width: 0;
+  padding: 24px 28px 48px;
+}
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px 20px;
+  margin-bottom: 18px;
+}
+.page-header h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+  .rail {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+    padding: 12px 16px;
+  }
+  .rail__nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .rail__account {
+    margin-top: 0;
+    flex-direction: row;
+    align-items: center;
+  }
+  .rail__email {
+    display: none;
+  }
+  .shell__main {
+    padding: 16px 16px 40px;
+  }
+}

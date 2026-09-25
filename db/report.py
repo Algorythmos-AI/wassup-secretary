@@ -14,7 +14,7 @@ QUERIES = {
     "calls": "SELECT count(*) FROM calls",
     "calls_analyzed": "SELECT count(*) FROM calls WHERE analyzed_at IS NOT NULL",
     "messages": "SELECT count(*) FROM messages",
-    "urgent_messages": "SELECT count(*) FROM messages WHERE category = 'urgent'",
+    "urgent_messages": "SELECT count(*) FROM messages WHERE urgent",
     "tool_invocations": "SELECT count(*) FROM tool_invocations",
     "raw_events_open": "SELECT count(*) FROM retell_events_raw WHERE processed_at IS NULL",
     "quarantine_open": "SELECT count(*) FROM quarantine_events WHERE resolved_at IS NULL",

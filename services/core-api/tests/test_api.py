@@ -353,3 +353,77 @@ def test_openapi_describes_every_response() -> None:
             "schema"
         ]
         assert ref["$ref"].endswith(f"/{model}"), (path, ref)
+
+
+async def test_open_only_lists_just_the_calls_still_to_do(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    ids = _new_calls(db_engine, seed.clinic_b, 4)
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(
+            text("UPDATE calls SET workflow_status = 'addressed' WHERE id = ANY(:ids)"),
+            {"ids": ids[:2]},
+        )
+        conn.execute(
+            text("UPDATE calls SET workflow_status = 'following_up' WHERE id = :id"), {"id": ids[2]}
+        )
+    seen: list[str] = []
+    cursor = None
+    while True:
+        params: dict[str, Any] = {"limit": 1, "open_only": "true"}
+        if cursor:
+            params["cursor"] = cursor
+        page = (
+            await client.get(
+                f"/v1/clinics/{seed.clinic_b}/calls", params=params, headers=_auth(ADMIN_AB)
+            )
+        ).json()
+        assert all(i["workflow_status"] in ("pending", "following_up") for i in page["items"])
+        seen += [i["id"] for i in page["items"]]
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+    assert {str(ids[2]), str(ids[3])} <= set(seen)  # paged through, one at a time
+    assert not {str(ids[0]), str(ids[1])} & set(seen)
+
+
+async def test_urgent_messages_are_flagged_in_the_list_and_the_detail(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    urgent_call, routine_call = _new_calls(db_engine, seed.clinic_b, 2)
+    with db_engine.connect() as conn, conn.begin():
+        for call, category, urgent in (
+            (urgent_call, "post_op", True),
+            (urgent_call, "general", False),
+            (routine_call, "urgent", False),  # the word alone doesn't make it urgent
+        ):
+            conn.execute(
+                text(
+                    "INSERT INTO messages "
+                    "(clinic_id, provider_call_id, category, detail, urgent, dedupe_key) "
+                    "VALUES (:c, :p, :cat, 'Synthetic message.', :u, :k)"
+                ),
+                {
+                    "c": seed.clinic_b,
+                    "p": f"call_{call.hex}",  # as _new_calls names them
+                    "cat": category,
+                    "u": urgent,
+                    "k": uuid.uuid4().hex,
+                },
+            )
+    items = (
+        await client.get(
+            f"/v1/clinics/{seed.clinic_b}/calls", params={"limit": 100}, headers=_auth(ADMIN_AB)
+        )
+    ).json()["items"]
+    flags = {i["id"]: i["has_urgent_message"] for i in items}
+    assert flags[str(urgent_call)] is True
+    assert flags[str(routine_call)] is False
+
+    detail = (
+        await client.get(
+            f"/v1/clinics/{seed.clinic_b}/calls/{urgent_call}", headers=_auth(ADMIN_AB)
+        )
+    ).json()
+    assert detail["call"]["has_urgent_message"] is True
+    assert sorted(m["urgent"] for m in detail["messages"]) == [False, True]

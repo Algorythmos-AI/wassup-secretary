@@ -23,6 +23,8 @@ jobs:
       - run: uv sync --frozen --all-packages
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - name: API contract (contracts/core-api.openapi.json) matches the code
+        run: uv run python scripts/export_openapi.py --check
       - name: Railway deploy configs match Railway's published schema
         run: uvx --from check-jsonschema==0.38.2 check-jsonschema --schemafile https://backboard.railway.app/railway.schema.json deploy/railway/*.json
 

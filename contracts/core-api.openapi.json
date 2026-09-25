@@ -1,0 +1,1391 @@
+{
+  "components": {
+    "schemas": {
+      "AnalyticsSummary": {
+        "properties": {
+          "by_day": {
+            "items": {
+              "$ref": "#/components/schemas/DayCount"
+            },
+            "title": "By Day",
+            "type": "array"
+          },
+          "by_hour": {
+            "items": {
+              "$ref": "#/components/schemas/HourCount"
+            },
+            "title": "By Hour",
+            "type": "array"
+          },
+          "by_weekday": {
+            "items": {
+              "$ref": "#/components/schemas/WeekdayCount"
+            },
+            "title": "By Weekday",
+            "type": "array"
+          },
+          "clinic_id": {
+            "format": "uuid",
+            "title": "Clinic Id",
+            "type": "string"
+          },
+          "from": {
+            "format": "date",
+            "title": "From",
+            "type": "string"
+          },
+          "sentiment": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Sentiment",
+            "type": "object"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "to": {
+            "format": "date",
+            "title": "To",
+            "type": "string"
+          },
+          "top_intents": {
+            "items": {
+              "$ref": "#/components/schemas/IntentCount"
+            },
+            "title": "Top Intents",
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/Totals"
+          },
+          "workflow": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "enum": [
+                "pending",
+                "following_up",
+                "addressed",
+                "no_action_needed"
+              ]
+            },
+            "title": "Workflow",
+            "type": "object"
+          }
+        },
+        "required": [
+          "clinic_id",
+          "from",
+          "to",
+          "timezone",
+          "totals",
+          "workflow",
+          "by_day",
+          "by_hour",
+          "by_weekday",
+          "sentiment",
+          "top_intents"
+        ],
+        "title": "AnalyticsSummary",
+        "type": "object"
+      },
+      "CallDetail": {
+        "properties": {
+          "call": {
+            "$ref": "#/components/schemas/CallRecord"
+          },
+          "interactions": {
+            "items": {
+              "$ref": "#/components/schemas/Interaction"
+            },
+            "title": "Interactions",
+            "type": "array"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/CapturedMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "call",
+          "messages",
+          "interactions"
+        ],
+        "title": "CallDetail",
+        "type": "object"
+      },
+      "CallPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CallSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "CallPage",
+        "type": "object"
+      },
+      "CallRecord": {
+        "properties": {
+          "analyzed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analyzed At"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Voice-provider cost in US dollars, as a decimal string",
+            "title": "Cost Usd"
+          },
+          "direction": {
+            "enum": [
+              "inbound",
+              "outbound"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "disconnection_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disconnection Reason"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "from_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Number"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
+          "is_priority": {
+            "title": "Is Priority",
+            "type": "boolean"
+          },
+          "is_reception_action": {
+            "title": "Is Reception Action",
+            "type": "boolean"
+          },
+          "local_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Call date in the clinic's own timezone",
+            "title": "Local Date"
+          },
+          "local_hour": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Hour"
+          },
+          "provider_call_id": {
+            "title": "Provider Call Id",
+            "type": "string"
+          },
+          "sentiment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentiment"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "to_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Number"
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Plain text. Never render it as HTML or Markdown.",
+            "title": "Transcript"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "workflow_status": {
+            "enum": [
+              "pending",
+              "following_up",
+              "addressed",
+              "no_action_needed"
+            ],
+            "title": "Workflow Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "started_at",
+          "from_number",
+          "duration_seconds",
+          "summary",
+          "intent",
+          "workflow_status",
+          "is_priority",
+          "is_reception_action",
+          "version",
+          "provider_call_id",
+          "direction",
+          "to_number",
+          "ended_at",
+          "cost_usd",
+          "disconnection_reason",
+          "transcript",
+          "sentiment",
+          "local_date",
+          "local_hour",
+          "analyzed_at"
+        ],
+        "title": "CallRecord",
+        "type": "object"
+      },
+      "CallSummary": {
+        "description": "One row of the call list: enough to triage, without the transcript.",
+        "properties": {
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "from_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Number"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
+          "is_priority": {
+            "title": "Is Priority",
+            "type": "boolean"
+          },
+          "is_reception_action": {
+            "title": "Is Reception Action",
+            "type": "boolean"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "workflow_status": {
+            "enum": [
+              "pending",
+              "following_up",
+              "addressed",
+              "no_action_needed"
+            ],
+            "title": "Workflow Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "started_at",
+          "from_number",
+          "duration_seconds",
+          "summary",
+          "intent",
+          "workflow_status",
+          "is_priority",
+          "is_reception_action",
+          "version"
+        ],
+        "title": "CallSummary",
+        "type": "object"
+      },
+      "CapturedMessage": {
+        "properties": {
+          "callback_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Callback Number"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "description": "What the caller said. Plain text; never render as HTML.",
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "detail",
+          "callback_number",
+          "created_at"
+        ],
+        "title": "CapturedMessage",
+        "type": "object"
+      },
+      "ClinicAccess": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "viewer",
+              "receptionist",
+              "admin",
+              "owner"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "timezone",
+          "role"
+        ],
+        "title": "ClinicAccess",
+        "type": "object"
+      },
+      "DayCount": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "calls"
+        ],
+        "title": "DayCount",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HourCount": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "hour": {
+            "maximum": 23.0,
+            "minimum": 0.0,
+            "title": "Hour",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hour",
+          "calls"
+        ],
+        "title": "HourCount",
+        "type": "object"
+      },
+      "IntentCount": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "intent": {
+            "title": "Intent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intent",
+          "calls"
+        ],
+        "title": "IntentCount",
+        "type": "object"
+      },
+      "Interaction": {
+        "properties": {
+          "action_type": {
+            "title": "Action Type",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "status_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status From"
+          },
+          "status_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status To"
+          }
+        },
+        "required": [
+          "action_type",
+          "status_from",
+          "status_to",
+          "note",
+          "created_at"
+        ],
+        "title": "Interaction",
+        "type": "object"
+      },
+      "Me": {
+        "properties": {
+          "clinics": {
+            "items": {
+              "$ref": "#/components/schemas/ClinicAccess"
+            },
+            "title": "Clinics",
+            "type": "array"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "clinics"
+        ],
+        "title": "Me",
+        "type": "object"
+      },
+      "Totals": {
+        "properties": {
+          "avg_duration_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Duration Seconds"
+          },
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "reception_action": {
+            "title": "Reception Action",
+            "type": "integer"
+          },
+          "total_duration_seconds": {
+            "title": "Total Duration Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "calls",
+          "avg_duration_seconds",
+          "total_duration_seconds",
+          "cost_usd",
+          "priority",
+          "reception_action"
+        ],
+        "title": "Totals",
+        "type": "object"
+      },
+      "UsageDay": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "minutes": {
+            "title": "Minutes",
+            "type": "string"
+          },
+          "provider_cost_usd": {
+            "title": "Provider Cost Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "calls",
+          "minutes",
+          "provider_cost_usd"
+        ],
+        "title": "UsageDay",
+        "type": "object"
+      },
+      "UsageReport": {
+        "properties": {
+          "clinic_id": {
+            "format": "uuid",
+            "title": "Clinic Id",
+            "type": "string"
+          },
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/UsageDay"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "from": {
+            "format": "date",
+            "title": "From",
+            "type": "string"
+          },
+          "to": {
+            "format": "date",
+            "title": "To",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/UsageTotals"
+          }
+        },
+        "required": [
+          "clinic_id",
+          "from",
+          "to",
+          "days",
+          "totals"
+        ],
+        "title": "UsageReport",
+        "type": "object"
+      },
+      "UsageTotals": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "minutes": {
+            "title": "Minutes",
+            "type": "string"
+          },
+          "provider_cost_usd": {
+            "title": "Provider Cost Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "calls",
+          "minutes",
+          "provider_cost_usd"
+        ],
+        "title": "UsageTotals",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WeekdayCount": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "weekday": {
+            "description": "Monday = 0",
+            "maximum": 6.0,
+            "minimum": 0.0,
+            "title": "Weekday",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "weekday",
+          "calls"
+        ],
+        "title": "WeekdayCount",
+        "type": "object"
+      },
+      "WorkflowAction": {
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "following_up",
+              "addressed",
+              "no_action_needed"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "WorkflowAction",
+        "type": "object"
+      },
+      "WorkflowResult": {
+        "properties": {
+          "call_id": {
+            "format": "uuid",
+            "title": "Call Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "workflow_status": {
+            "enum": [
+              "pending",
+              "following_up",
+              "addressed",
+              "no_action_needed"
+            ],
+            "title": "Workflow Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "workflow_status",
+          "version"
+        ],
+        "title": "WorkflowResult",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "core-api",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/clinics/{clinic_id}/analytics/summary": {
+      "get": {
+        "operationId": "summary_v1_clinics__clinic_id__analytics_summary_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Summary"
+      }
+    },
+    "/v1/clinics/{clinic_id}/calls": {
+      "get": {
+        "operationId": "list_calls_v1_clinics__clinic_id__calls_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Calls"
+      }
+    },
+    "/v1/clinics/{clinic_id}/calls/{call_id}": {
+      "get": {
+        "operationId": "call_detail_v1_clinics__clinic_id__calls__call_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "call_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Call Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Call Detail"
+      }
+    },
+    "/v1/clinics/{clinic_id}/calls/{call_id}/workflow": {
+      "post": {
+        "description": "Change a call's workflow status. ``If-Match`` carries the version the user saw (two\nreceptionists can't silently overwrite each other); ``Idempotency-Key`` makes retries safe.",
+        "operationId": "update_workflow_v1_clinics__clinic_id__calls__call_id__workflow_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "call_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Call Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 100,
+              "minLength": 8,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "title": "If-Match",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowAction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Workflow"
+      }
+    },
+    "/v1/clinics/{clinic_id}/events": {
+      "get": {
+        "operationId": "clinic_events_v1_clinics__clinic_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clinic Events"
+      }
+    },
+    "/v1/clinics/{clinic_id}/usage": {
+      "get": {
+        "description": "Billing view (admins and owners): per-day calls, minutes and voice-provider cost, rolled\nup hourly by ops-worker. Days without calls are omitted.",
+        "operationId": "usage_v1_clinics__clinic_id__usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Usage"
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "operationId": "me_v1_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Me"
+      }
+    }
+  }
+}

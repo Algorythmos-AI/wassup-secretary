@@ -1,0 +1,3 @@
+# False positives only. Each line is a gitleaks fingerprint (commit:file:rule:line) with the reason.
+# Idempotency-Key test value "key-12345678" in the web API client test (not a credential; since renamed).
+134f54fc40916940c6e762ddf3d838e6d7803d1f:apps/web/src/api/__tests__/client.test.ts:generic-api-key:33

@@ -1,0 +1,51 @@
+.signin {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  background: var(--ink);
+}
+.signin__sheet {
+  width: min(100%, 400px);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 28px;
+  background: var(--sheet);
+  border-radius: var(--radius);
+}
+.signin__product {
+  margin: 0;
+  font-family: var(--font-cond);
+  font-weight: 600;
+  font-size: 30px;
+}
+.signin__lede {
+  margin: 0;
+  color: var(--ink-soft);
+}
+.signin__google {
+  justify-content: center;
+}
+.signin__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+.signin__form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.signin__form input {
+  padding: 9px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+.signin__form .button {
+  justify-content: center;
+}

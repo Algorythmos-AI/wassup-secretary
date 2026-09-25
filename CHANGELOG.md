@@ -3,4 +3,100 @@
 All notable changes are recorded here. Versions follow SemVer. One version covers the whole monorepo.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-09-27
+
+First release: everything below shipped to `integration` between 24 and 26 September 2026 and ran on staging, the final candidate for 24 hours under synthetic traffic.
+
+- Nightly encrypted backups (ops-worker) taken as a new read-only `wassup_backup` role, verified by fetching the stored archive back and checking every table's hash and count; `/health/backup`; `db/restore.py` and the restore drill runbook. Migration `0013`; re-run the db-admin bootstrap first (`WASSUP_PASSWORD_BACKUP`).
+- Patient list import (`db/import_patients.py`), `lookup_patient` per-caller limits with a keyed caller hash, and a `verified` flag compared on one canonical phone form. Migration `0012`.
+- Team management from the dashboard: invitations, enrolment at sign-in, role changes. Migration `0011`.
+- Classifier: a generic rules engine with each clinic's rules as versioned data (`clinic_classifier_rules`, migration `0010`), classification at write time, and db-admin load, activate (rollback) and reclassify. Rollback rehearsed on staging.
+- Operator decisions without a SQL session: db-admin `WASSUP_ROLE=ops` (list, requeue or abandon dead outbox events, resolve quarantine, requeue quarantined webhooks), used by the outbox-dead-letter and quarantine runbooks.
+- uvicorn's access log stays off (it wrote full URLs with query strings); staging soak (`scripts/soak.py`) and load (`scripts/load.py`) tools; clock-change tests for stored local call times; readiness record `docs/readiness/2026-09-25-staging.md`.
+- Reception dashboard `apps/web` (React + TypeScript, typed from the committed OpenAPI contract): Firebase sign-in, inbox laid out as a day sheet with live updates, call panel with status changes (If-Match + Idempotency-Key), analytics, usage (admins), office TV board, Australian number formatting. Served by Caddy with CSP/HSTS, no source maps, a real 404 for missing assets, and `/version.json` so screens reload themselves after a deploy. A build with missing or wrong settings shows a page naming them.
+- Messages keep their urgency at rest (`messages.urgent`, migration `0009`, backfilled from alert events); the call list and detail carry `has_urgent_message`; `open_only` and `order=oldest` on the call list; voice cost is withheld server-side below admin.
+- Legacy history import `db/import_legacy.py` (one clinic per run, dry run by default, one verified transaction, idempotent, counts-only output; a production apply needs a per-clinic acknowledgement) with runbook `legacy-import.md`.
+- Independent review of the dashboard and live events: 13 defects fixed with regression tests (stale call-panel responses, closed calls stuck in To do, missed events on reconnect, refresh coalescing, backoff and idle watchdog, session retry, TV revocation and ordering).
+- Deploy on Railway without config-as-code: env-driven `deploy/entrypoint.sh` (`WASSUP_ROLE` serve / bootstrap / seed-synthetic / report / import-legacy), one-shot `db-admin` role bootstrap with platform-generated passwords, exact-commit deploys via `scripts/deploy-railway.sh`.
+- Release path: production deploys only from a `v*` tag on `main` with green CI and a CHANGELOG entry, in a fixed service order, verified by `/health` tree; rollback is the previous tag.
 - Repository bootstrap: licence, notice, agent rules, security policy.
+- uv workspace: `wassup_core` (settings, allowlist log redaction, RFC 9457 errors, per-route body limits, app factory) and three service skeletons with `/health`; CI (lint, types, tests with Postgres, image build + smoke, `ci-gate`), security scans, PR-title check.
+- Database foundation: role model (`db/roles.sql`), Alembic migration `0001` with every tenant table under ENABLE + FORCE row-level security, three narrowly granted SECURITY DEFINER resolvers owned by a read-only `wassup_resolver` role, least-privilege grants per service, append-only audit log; 36 tenancy tests run as the real app roles against Postgres in CI.
+- voice-gateway webhook ingestion: signature verified on raw bytes (current or previous key, 5-minute replay window, constant time), raw event stored before processing, clinic resolved from agent and dialled number (mismatch → quarantine), call upsert that never erases earlier facts, outbox event in the same transaction, synthetic line-check calls never stored, 503 on database outage so the provider retries.
+- voice-gateway tool calls `/v1/retell/tools/{clinic_slug}/{tool}`: exactly-once via a claimed `tool_invocations` row in the same transaction (safe under concurrent retries), clinic slug must match the signed agent + dialled number, hard time budget with per-tool fallbacks, synthetic calls are no-ops. Tools: `capture_message` (urgent → `message.urgent` outbox event), `create_promise`, privacy-first `lookup_patient` (exact match, opaque ref, deceased = no match, 2 per call).
+- ops-worker: transactional-outbox consumer (`FOR UPDATE SKIP LOCKED`, 5-minute leases so a crashed worker's events are reclaimed, exponential backoff, dead-letter after 8 attempts); urgent messages emailed to the clinic's alert contacts via Resend with per-event delivery records (retries never resend); in-process scheduler with optional external heartbeat; migration `0002` (line-check runs table, alert-delivery grants).
+- Outage detectors in ops-worker: daily line-check canary (claimed per line per local day, DST-aware; placement failure or no receipt within 15 min emails ops once; voice-gateway records receipts of synthetic calls), detect-only ingestion-gap reconciler, and monitor endpoints `/health/canary` (503 on failing or stale — a dead scheduler is an outage) and `/health/freshness` (503 only on a proven gap). Runbook `docs/runbooks/phone-line-down.md`.
+- core-api `/v1`: Firebase ID-token verification (RS256 against Google's rotating keys; audience, issuer, expiry, verified email; test mode refused outside local/test), staff resolved through the new `staff_memberships` resolver, `/v1/me`, clinic call list with keyset pagination, audited call detail, and workflow actions with `Idempotency-Key` + `If-Match` optimistic locking and role checks (another clinic's data is always 404). Migration `0003` removes `app_core`'s read access to `staff_users` (it had no clinic scoping).
+- Security review fixes: every SECURITY DEFINER function pins `pg_temp` last and login roles lose TEMPORARY (a temporary view could forge clinic memberships); unused `staff_clinic_ids` dropped; audit log hash-chained per clinic by a trigger owned by the new NOLOGIN `wassup_auditor` role (gap-free under concurrency, tampering detectable); call-list reads audited with the call ids shown; `Idempotency-Key` bound to one call and request (reuse → 422; replay returns the original answer); exceptions logged as type and location only — never their message — across structlog and library loggers, and SQLAlchemy errors never include bound values; malformed signature headers and cursors are 401/400 instead of 500; `WASSUP_ENVIRONMENT` defaults to `production` (fails closed). Migration `0004`; re-run `db/roles.sql` and `db/grant_database.sql` first.
+- Reliability review fixes:
+  - **Migrations** are transactional. Each revision commits atomically with its version stamp; autocommit connections are refused; a session advisory lock serialises concurrent deploys (proved with three parallel CLI runs).
+  - **Tool requests** are stored raw before write tools run (lookups never are). Write-tool fallbacks now say `ok: false`: the agent never claims an unsaved message was passed on (`docs/voice-tools.md`).
+  - **Replay:** ops-worker replays unfinished webhook events and tool requests through voice-gateway, signed like Retell and exactly-once, with backoff over about 16 minutes. When replays are exhausted, ops is emailed and `/health/replay` goes red.
+  - **Webhook errors:** the webhook answers 503 on transient database errors, now including pool timeouts; bugs are acknowledged and left for replay.
+  - **Line-check calls:** a call from one of our numbers counts as a line check only when that exact line check is running (caller ID can be spoofed).
+  - **NUL characters** are stripped before storage.
+  - **Outbox:**
+    - completion is fenced on (status, attempts);
+    - a crash-looping event is dead-lettered instead of re-claimed forever;
+    - each dead letter emails ops;
+    - `/health/outbox` is red on dead letters, overdue events or repeated failures;
+    - new `abandoned` status;
+    - only our own error codes are stored as `last_error`.
+  - **Monitor endpoints** are cached and single-flight.
+  - Migration `0005`; runbooks `outbox-dead-letter.md` and `replay-exhausted.md`.
+- Telephony account monitor in ops-worker. Every 5 minutes it checks the account status, balance against a floor, and that each AI line number is still owned, using an API key and reading nothing else from the response. A change to failing emails ops at once, then every 6 hours while it stays failing. `/health/telephony` serves the last result from memory and turns red when a check is failing, stale or never ran. ops-worker's background jobs are now declared in one place.
+- core-api `GET /v1/clinics/{id}/analytics/summary?from&to`:
+  - Aggregates are computed in SQL on the clinic's own calendar (`local_date`, `local_hour` and weekday are stored in the clinic's timezone).
+  - Returns totals (calls, average and total duration, cost, priority, reception action), workflow counts, zero-filled daily, hourly and weekday series, sentiment and the top intents.
+  - The range defaults to the last 30 clinic days and is capped at 400; viewer role and above.
+  - Counts only, so nothing personal is read.
+- Typed staff API contract:
+  - Every core-api response is now an explicit Pydantic model. Call detail selects named columns rather than `SELECT *`, so internal columns can't leak.
+  - The OpenAPI document is committed as `contracts/core-api.openapi.json`, and CI fails if it drifts from the code.
+- Usage rollup:
+  - ops-worker recomputes calls, minutes and voice-provider cost per clinic per local day every hour, over the last 4 days. It is idempotent and absorbs late analysis.
+  - New endpoint `GET /v1/clinics/{id}/usage?from&to` for admins and owners (billing input).
+- Second review's fixes:
+  - **Live streams can't skip events.** Events are delivered in (transaction, id) order, and only from transactions older than every running one. Cursor format is `<xact>-<id>`.
+  - **Stream limits:** 5 per person and 200 per replica; a poll interrupted by a disconnect is shielded so it finishes cleanly.
+  - **core-api outbox inserts** are restricted to `call.workflow` by a RESTRICTIVE policy.
+  - **Readiness gating:** `/health` answers 503 `not_ready` until the schema a service needs exists, so a deploy can't go live before its migration.
+  - **CLI rollback** steps back one rebind at a time and refuses to undo someone else's later change (`--force` to override).
+  - **Voice-config drift** reports `no_expected_agent`, and an empty check fails.
+  - **Quarantine:** quarantined calls are kept until resolved; a new quarantine monitor emails ops and serves `/health/quarantine`, with a runbook.
+  - **Smaller fixes:**
+    - analytics returns 400, not 500, for dates near year 1;
+    - the telephony job fails (no heartbeat) when it can't reach the provider;
+    - `/health/telephony` no longer shows the balance;
+    - app roles have a 30 s idle-in-transaction limit;
+    - migration rules are in AGENTS.md.
+  - Migration `0008`.
+- Live dashboard events, `GET /v1/clinics/{id}/events` (Server-Sent Events):
+  - **What it sends:** the clinic's outbox events, ids only.
+  - **Access:** membership is re-checked every 5 minutes; a removed member's stream ends with `revoked`.
+  - **Lifetime:** the stream ends with `reauth` when the sign-in token expires.
+  - **Resume:** `Last-Event-ID` resumes a stream; a reconnect that is too far behind gets `reset`.
+  - **Cost:** no database connection is held between polls.
+  - **Workflow changes:** a status change now emits a `call.workflow` event, so every screen updates. Migration `0007`.
+  - **Verified live** through uvicorn: about 70 ms from insert to delivery.
+- Railway config-as-code per service (`deploy/railway/*.json`):
+  - Dockerfile build, watch paths, `/health` check, restart policy and replicas.
+  - Draining longer than uvicorn's 30 s graceful shutdown.
+  - Migrations as ops-worker's pre-deploy step.
+  - Validated against Railway's published schema in CI.
+- Operator CLI `wassup` (`tools/wassup-cli`), the cutover and rollback tool:
+  - `voice bindings` flags floating or unpublished bindings.
+  - `voice export` backs up numbers plus bound agent and LLM versions as owner-only files.
+  - `voice rebind` is a dry run by default, refuses drafts and "latest", records the previous binding before writing and re-reads to verify.
+  - `voice rollback` restores the recorded binding and refuses to restore a floating binding.
+  - Verified read-only against production.
+- Voice-configuration drift monitor in ops-worker:
+  - Every 15 minutes, each active clinic number is compared with the voice provider's live configuration.
+  - Each number is reported as one of: `not_found`, `unbound`, `wrong_agent`, `floating_version`, `wrong_version`, `unpublished_version`, `webhook_mismatch` or `ok`.
+  - Agent versions are fetched exactly, and a version the API didn't return as asked for is never trusted.
+  - Ops is alerted on a change to failing and then every 12 hours; `/health/voice-config` reports the current state.
+  - Telephony and voice-config monitors now share the same `Watch` state.
+  - Verified read-only against production: both lines report `ok`, and a deliberately wrong webhook or pinned version is detected.
+- Raw-payload retention in ops-worker: `retell_events_raw`, `tool_requests_raw` and `quarantine_events` (verbatim caller content duplicated from the call records) are deleted `WASSUP_RAW_RETENTION_DAYS` (default 90) after they are finished, in small batches. Unresolved rows are never deleted. Migration `0006`.
+- Deploy readiness: migrations ship in the ops-worker image (run as the pre-deploy step), build-once image publishing to GHCR tagged by source tree (gated behind `PUBLISH_IMAGES`), go-live runbook.

@@ -1,0 +1,22 @@
+name: pr-hygiene
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: Conventional PR title
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ ! "$TITLE" =~ ^(feat|fix|docs|chore|ci|refactor|perf|test|build|revert|release)(\([a-z0-9/-]+\))?!?:\ .+ ]]; then
+            echo "PR title must be Conventional Commits, e.g. 'feat(core-api): add call list'. Got: $TITLE"
+            exit 1
+          fi

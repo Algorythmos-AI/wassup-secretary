@@ -1,0 +1,27 @@
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [integration, main]
+  schedule:
+    - cron: "0 20 * * 0" # weekly, Monday 06:00 Sydney
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    uses: Algorythmos-AI/.github/.github/workflows/security.yml@1df2dcc757d7de961a6c305b65117d57b945e9f8
+    with:
+      semgrep: false
+
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      - run: uv export --frozen --all-packages --no-dev --no-emit-workspace --format requirements-txt > requirements.txt
+      - run: uvx pip-audit --strict -r requirements.txt

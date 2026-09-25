@@ -1,0 +1,138 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [integration, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      - run: uv sync --frozen --all-packages
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - name: API contract (contracts/core-api.openapi.json) matches the code
+        run: uv run python scripts/export_openapi.py --check
+      - name: Railway deploy configs match Railway's published schema
+        run: uvx --from check-jsonschema==0.38.2 check-jsonschema --schemafile https://backboard.railway.app/railway.schema.json deploy/railway/*.json
+
+  typecheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      - run: uv sync --frozen --all-packages
+      - run: uv run mypy libs/wassup_core/src services/*/src tools/*/src
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wassup_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 5s --health-retries 20
+    env:
+      # Throwaway CI database only: synthetic data, destroyed with the job.
+      TEST_DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/wassup_test
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      - run: uv sync --frozen --all-packages
+      - run: uv run pytest
+
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [voice-gateway, core-api, ops-worker]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build ${{ matrix.service }} image (no push)
+        run: >-
+          docker build --build-arg SERVICE=${{ matrix.service }}
+          --build-arg GIT_TREE=$(git rev-parse HEAD^{tree})
+          -t wassup-${{ matrix.service }}:ci .
+      - name: Smoke-test /health inside the image
+        run: |
+          docker run -d --name svc -p 8080:8080 -e WASSUP_ENVIRONMENT=test wassup-${{ matrix.service }}:ci
+          for i in $(seq 1 30); do curl -fsS localhost:8080/health && exit 0; sleep 1; done
+          docker logs svc; exit 1
+
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - name: Generated API types (src/api/schema.d.ts) match the contract
+        run: npm run api:check
+      - name: Build the image and check it serves the app with its security headers
+        working-directory: .
+        run: |
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          docker build -f apps/web/Dockerfile \
+            --build-arg VITE_API_BASE=https://api.example.test \
+            --build-arg GIT_TREE="$tree" \
+            --build-arg VITE_FIREBASE_AUTH_DOMAIN=auth.example.test \
+            -t wassup-web:ci .
+          docker run -d --name web -p 8080:8080 \
+            -e VITE_API_BASE=https://api.example.test -e VITE_FIREBASE_AUTH_DOMAIN=auth.example.test wassup-web:ci
+          for _ in $(seq 1 20); do curl -fsS -o /dev/null localhost:8080/ && break; sleep 1; done
+          headers="$(curl -fsSI localhost:8080/c/any/inbox)"
+          echo "$headers"
+          grep -qi '^content-type: text/html' <<<"$headers"
+          grep -qi "^content-security-policy: .*connect-src 'self' https://api.example.test" <<<"$headers"
+          grep -qi "frame-src https://auth.example.test" <<<"$headers"
+          grep -qi '^x-frame-options: DENY' <<<"$headers"
+          grep -qi '^strict-transport-security: ' <<<"$headers"
+          missing="$(curl -sI localhost:8080/assets/missing.js)"
+          grep -q '^HTTP/1.1 404' <<<"$missing"
+          grep -qi '^cache-control: no-store' <<<"$missing"  # never cache a 404 for a year
+          grep -qi '^content-security-policy: ' <<<"$missing"  # headers survive error responses
+          test "$(curl -fsS localhost:8080/version.json)" = "{\"build\":\"$tree\"}"
+          if docker run --rm --entrypoint sh wassup-web:ci -c 'grep -rlq sourceMappingURL /srv'; then
+            echo "source maps must not ship" >&2; exit 1
+          fi
+
+  # The single required check: reports on every run, fails if any job failed or was cancelled.
+  ci-gate:
+    if: always()
+    needs: [lint, typecheck, test, image, web]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: All CI jobs passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 -c "import json,os,sys; n=json.loads(os.environ['NEEDS']); bad={k:v['result'] for k,v in n.items() if v['result']!='success'}; print(bad or 'all green'); sys.exit(1 if bad else 0)"

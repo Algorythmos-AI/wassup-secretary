@@ -26,3 +26,6 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Voice exports contain prompts (trade secrets): never commit them.
+voice-export*/

@@ -1,0 +1,154 @@
+name: release
+
+# Two jobs.
+#
+# publish: build each service image once per source tree and push it to GHCR, tagged by the git
+# tree hash. Publishing is outward-facing, so it stays OFF until the repository variable
+# PUBLISH_IMAGES=true.
+#
+# deploy-production: runs only for a v* tag. A release is the only way anything reaches
+# production. The job refuses a tag whose commit is not on main, whose CI did not pass, or whose
+# version is missing from CHANGELOG.md, then deploys the exact commit to the Railway `production`
+# environment in the fixed order (db-admin, ops-worker with migrations, voice-gateway, core-api,
+# web) and verifies every service reports that commit's tree. It needs the RAILWAY_TOKEN secret
+# (a project token scoped to `production`); without it the job stops and says so.
+# Rollback = re-run this workflow for the previous tag (workflow_dispatch with `tag`).
+
+on:
+  push:
+    branches: [integration, main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to deploy to production (for a rollback: the previous tag)"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: vars.PUBLISH_IMAGES == 'true' && startsWith(github.ref, 'refs/heads/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [voice-gateway, core-api, ops-worker]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build and push ${{ matrix.service }}
+        env:
+          SERVICE: ${{ matrix.service }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          TREE=$(git rev-parse 'HEAD^{tree}')
+          IMAGE="ghcr.io/algorythmos-ai/wassup-secretary-${SERVICE}"
+          echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          if docker manifest inspect "${IMAGE}:tree-${TREE}" >/dev/null 2>&1; then
+            echo "Image for tree ${TREE} already published; reusing it."
+          else
+            docker build --build-arg SERVICE="${SERVICE}" --build-arg GIT_TREE="${TREE}" \
+              --build-arg VERSION="${GITHUB_SHA}" -t "${IMAGE}:tree-${TREE}" .
+            docker push "${IMAGE}:tree-${TREE}"
+          fi
+          echo "### ${SERVICE}: \`${IMAGE}:tree-${TREE}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-production:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: production
+    # One production deploy at a time, whatever triggered it (a tag push and a rollback dispatch
+    # are different refs and would otherwise interleave).
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - name: Refuse anything that is not a release of main with green CI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          case "$TAG" in v[0-9]*) ;; *) echo "not a v* tag: $TAG"; exit 1 ;; esac
+          sha="$(git rev-parse HEAD)"
+          [ "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "$sha" ] || { echo "$TAG does not point at the checked-out commit"; exit 1; }
+          git merge-base --is-ancestor "$sha" origin/main || { echo "$TAG is not on main"; exit 1; }
+          grep -qF "## [${TAG#v}]" CHANGELOG.md || { echo "CHANGELOG.md has no [${TAG#v}] section"; exit 1; }
+          # A release commit is a fresh merge commit: its CI may still be running. Wait for it.
+          for _ in $(seq 1 60); do
+            state="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs?check_name=ci-gate&per_page=50" \
+              --jq '[.check_runs[] | select(.app.slug=="github-actions")] | sort_by(.started_at) | last | "\(.status)/\(.conclusion)"')"
+            case "$state" in
+              completed/success) echo "ci-gate: success"; break ;;
+              completed/*) echo "ci-gate for $sha finished as '$state'"; exit 1 ;;
+              *) echo "ci-gate: $state, waiting"; sleep 30 ;;
+            esac
+          done
+          [ "$state" = "completed/success" ] || { echo "ci-gate did not finish in 30 min"; exit 1; }
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_ENV"
+      - name: Need a Railway project token
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN is not set (a Railway project token scoped to the production environment). Nothing was deployed."
+            exit 1
+          fi
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - run: npm install -g @railway/cli@4.40.0
+      - name: Deploy ${{ env.RELEASE_TAG }} to production, in order
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: scripts/deploy-railway.sh production db-admin ops-worker voice-gateway core-api web
+      - name: Verify every service reports this release
+        env:
+          VOICE_GATEWAY_URL: ${{ vars.PROD_VOICE_GATEWAY_URL }}
+          CORE_API_URL: ${{ vars.PROD_CORE_API_URL }}
+          OPS_WORKER_URL: ${{ vars.PROD_OPS_WORKER_URL }}
+          WEB_URL: ${{ vars.PROD_WEB_URL }}
+        run: |
+          fail=0
+          for pair in "voice-gateway=$VOICE_GATEWAY_URL" "core-api=$CORE_API_URL" "ops-worker=$OPS_WORKER_URL"; do
+            name="${pair%%=*}"; url="${pair#*=}"
+            [ -n "$url" ] || continue  # reported as an error below
+            for _ in $(seq 1 30); do
+              got="$(curl -fsS -m 10 "$url/health" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tree",""))' 2>/dev/null || true)"
+              [ "$got" = "$TREE" ] && break; sleep 10
+            done
+            if [ "$got" = "$TREE" ]; then echo "$name: ok ($TREE)"; else echo "::error::$name reports tree '$got', expected $TREE"; fail=1; fi
+          done
+          if [ -n "$WEB_URL" ]; then
+            for _ in $(seq 1 30); do
+              got="$(curl -fsS -m 10 "$WEB_URL/version.json" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("build",""))' 2>/dev/null || true)"
+              [ "$got" = "$TREE" ] && break; sleep 10
+            done
+            if [ "$got" = "$TREE" ]; then echo "web: ok"; else echo "::error::web reports build '$got', expected $TREE"; fail=1; fi
+          fi
+          for pair in "voice-gateway=$VOICE_GATEWAY_URL" "core-api=$CORE_API_URL" "ops-worker=$OPS_WORKER_URL" "web=$WEB_URL"; do
+            [ -n "${pair#*=}" ] || { echo "::error::PROD_*_URL for ${pair%%=*} is not set; verification would be incomplete"; fail=1; }
+          done
+          exit $fail
+      - name: Summary
+        run: |
+          echo "Deployed ${RELEASE_TAG} (tree ${TREE}) to production." >> "$GITHUB_STEP_SUMMARY"
+          echo "Rollback = re-run this workflow with the previous tag." >> "$GITHUB_STEP_SUMMARY"

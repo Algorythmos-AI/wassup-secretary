@@ -102,6 +102,10 @@ def test_reception_action_and_labels() -> None:
     assert out.action_label == "Appointment Request"
     assert out.intent_label == "Appointment Request"
     assert classify(_c(intent="Post Op"), RULES).intent_label == "Post-op Concern"
+    spaced = RuleSet.parse({"intent_labels": {"Post Op": "Post-op Concern"}})
+    assert (
+        classify(_c(intent="post_op"), spaced).intent_label == "Post-op Concern"
+    )  # key normalised too
     assert classify(_c(intent="something_new"), RULES).intent_label == "something_new"
     assert classify(_c(summary="nothing much"), RULES).action_label == "Message Captured"
     assert classify(_c(call_successful=False), RULES).is_reception_action is True
@@ -160,6 +164,10 @@ def test_empty_rules_classify_nothing() -> None:
         {"schema_version": 2},
         {"tiers": [{"level": "priority_1", "reason": "x", "any": ["k" * 81]}]},
         {"priority_signal": {"keywords": [f"k{i}" for i in range(501)]}},
+        {"route_levels": {"Book": "priority_3", "book": "emergency"}},  # would shadow each other
+        [],  # not an object
+        "[1, 2]",
+        "not json",
     ],
 )
 def test_invalid_rules_are_refused(bad: dict[str, object]) -> None:

@@ -9,6 +9,10 @@ never in this repository. The schema is documented in the engine's models (`Rule
 Until a clinic has active rules, its calls are stored unclassified (tier `null`, priority false).
 Nothing is ever dropped because of rules: a rule set the engine can't read is logged and ignored.
 
+Matching is plain, case-insensitive substring matching, the same as the legacy classifier, so a
+short keyword matches inside longer words (`pain` matches "painting"). Prefer multi-word phrases
+and check a new version with the parity script before activating it.
+
 ## Load a new version (dry, then live)
 
 Rules are loaded inside the platform by the one-shot `db-admin` service, so the document goes

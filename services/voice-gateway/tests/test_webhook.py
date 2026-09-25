@@ -279,26 +279,30 @@ SYNTHETIC_RULES = json.dumps(
 )
 
 
-def _rules(db_engine: Engine, clinic: uuid.UUID, rules: str, active: bool = True) -> None:
+def _rules(db_engine: Engine, clinic: uuid.UUID, rules: str, active: bool = True) -> int:
+    """Store (and activate) a rules version for the clinic; returns the version number. The
+    database is shared by the whole session, so the number depends on what ran before."""
     with db_engine.connect() as conn, conn.begin():
         conn.execute(
             text("UPDATE clinic_classifier_rules SET active = false WHERE clinic_id = :c"),
             {"c": clinic},
         )
-        conn.execute(
-            text(
-                "INSERT INTO clinic_classifier_rules (clinic_id, version, rules, active) VALUES "
-                "(:c, (SELECT coalesce(max(version), 0) + 1 FROM clinic_classifier_rules WHERE clinic_id = :c), "
-                "CAST(:r AS jsonb), :a)"
-            ),
-            {"c": clinic, "r": rules, "a": active},
+        return int(
+            conn.execute(
+                text(
+                    "INSERT INTO clinic_classifier_rules (clinic_id, version, rules, active) VALUES "
+                    "(:c, (SELECT coalesce(max(version), 0) + 1 FROM clinic_classifier_rules "
+                    "WHERE clinic_id = :c), CAST(:r AS jsonb), :a) RETURNING version"
+                ),
+                {"c": clinic, "r": rules, "a": active},
+            ).scalar_one()
         )
 
 
 async def test_an_analysed_call_is_classified_with_the_clinics_active_rules(
     client: httpx.AsyncClient, db_engine: Engine, seed: Seed
 ) -> None:
-    _rules(db_engine, seed.clinic_a, SYNTHETIC_RULES)
+    version = _rules(db_engine, seed.clinic_a, SYNTHETIC_RULES)
     client._transport.app.state.rules.forget()  # type: ignore[attr-defined]
     call_id = f"call_{uuid.uuid4().hex}"
     call = _call(call_id)
@@ -312,7 +316,7 @@ async def test_an_analysed_call_is_classified_with_the_clinics_active_rules(
         True,
         True,
     )
-    assert row["action_label"] == "Callback Needed" and row["classifier_version"] == 1
+    assert row["action_label"] == "Callback Needed" and row["classifier_version"] == version
     assert row["classified_at"] is not None
 
     # The agent's own route wins, and the call is re-classified on a later analysed event.

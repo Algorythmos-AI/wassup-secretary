@@ -7,7 +7,7 @@ activating the previous version. Each call records the level it was given, when,
 rules version, so a reclassification is auditable and idempotent.
 
 ``is_priority`` and ``is_reception_action`` already existed (always false until now). They are
-now set by the engine at write time and can be backfilled (``db/reclassify.py``).
+now set by the engine at write time and can be backfilled (``db/classifier_rules.py`` (``WASSUP_ROLE=reclassify``)).
 
 Revision ID: 0010
 Revises: 0009
@@ -39,8 +39,9 @@ ALTER TABLE clinic_classifier_rules FORCE ROW LEVEL SECURITY;
 CREATE POLICY clinic_classifier_rules_clinic_isolation ON clinic_classifier_rules
   USING (clinic_id = ANY ((SELECT wassup_current_clinics())::uuid[]))
   WITH CHECK (clinic_id = ANY ((SELECT wassup_current_clinics())::uuid[]));
--- Services only read rules; versions are written by the owner role (db-admin).
-GRANT SELECT ON clinic_classifier_rules TO app_voice, app_core, app_ops;
+-- Only the voice gateway reads rules (they are clinic vocabulary, and only ingestion needs
+-- them); versions are written by the owner role (db-admin).
+GRANT SELECT ON clinic_classifier_rules TO app_voice;
 
 ALTER TABLE calls
   -- The agent's own routing decision and the provider's success judgement: inputs to the

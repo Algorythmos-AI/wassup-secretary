@@ -3,7 +3,7 @@
 Rules change rarely (a new version is activated by an operator) and the webhook must not spend a
 query per event on them, so each clinic's active rule set is cached for ``TTL_S`` seconds. A rule
 set that fails validation is logged and treated as "no rules": the call is stored unclassified
-rather than dropped, and ``db/reclassify.py`` can classify it later.
+rather than dropped; ``db/classifier_rules.py`` (``WASSUP_ROLE=reclassify``) classifies it later.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ class RulesCache:
         if row is not None:
             try:
                 active = ActiveRules(int(row.version), RuleSet.parse(row.rules))
-            except ValueError:
+            except (ValueError, TypeError):
                 # Never let a bad rule set break ingestion; the call is stored unclassified.
                 log.error("classifier_rules_invalid", clinic_id=str(clinic_id), version=row.version)
         self._entries[clinic_id] = (now + self._ttl, active)

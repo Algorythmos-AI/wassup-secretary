@@ -140,12 +140,30 @@ class RuleSet(_Strict):
 
     @field_validator("route_levels", "intent_labels")
     @classmethod
-    def _lower_keys(cls, v: dict[str, Any]) -> dict[str, Any]:
-        return {k.lower().strip(): val for k, val in v.items()}
+    def _norm_keys(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Keys are matched the way inputs are normalised (lower case, words joined by ``_``);
+        two keys that collide after that would silently shadow each other, so they are refused."""
+        out: dict[str, Any] = {}
+        for key, val in v.items():
+            norm = "_".join(key.lower().split())
+            if norm in out:
+                raise ValueError(f"duplicate key after normalisation: {norm!r}")
+            out[norm] = val
+        return out
 
     @classmethod
     def parse(cls, raw: str | bytes | dict[str, Any]) -> RuleSet:
-        return cls.model_validate(raw if isinstance(raw, dict) else json.loads(raw))
+        """Validate a document from JSON text or an already-decoded object. Anything that is
+        not a JSON object is refused as a ValueError (never a TypeError), so callers that
+        treat "bad rules" as one case stay correct."""
+        if isinstance(raw, str | bytes):
+            try:
+                raw = json.loads(raw)
+            except ValueError as exc:
+                raise ValueError(f"rules are not valid JSON: {type(exc).__name__}") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("rules must be a JSON object")
+        return cls.model_validate(raw)
 
 
 class CallFacts(_Strict):

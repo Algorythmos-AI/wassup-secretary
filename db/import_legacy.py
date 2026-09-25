@@ -524,7 +524,8 @@ def main() -> int:
         return 2
     apply = env.get("WASSUP_IMPORT_APPLY") == "true"
     slug = env["WASSUP_IMPORT_CLINIC"]
-    production = env.get("WASSUP_ENVIRONMENT", "production") == "production"
+    # Fails closed: anything but a known non-production environment counts as production.
+    production = env.get("WASSUP_ENVIRONMENT", "") not in ("local", "test", "staging")
     if apply and production and env.get("WASSUP_PRODUCTION_ACK") != slug:
         print(
             "import refused: applying to production needs WASSUP_PRODUCTION_ACK set to the "

@@ -382,6 +382,10 @@ def test_production_apply_needs_a_per_clinic_acknowledgement(
 
     monkeypatch.setenv("WASSUP_PRODUCTION_ACK", "some-other-clinic")  # a stale flag is not consent
     assert importer.main() == 2
+    monkeypatch.setenv(
+        "WASSUP_ENVIRONMENT", "Production "
+    )  # a typo is not a non-production environment
+    assert importer.main() == 2
     assert _rows(target, "SELECT count(*) AS n FROM calls")[0]["n"] == 0
 
     monkeypatch.setenv("WASSUP_PRODUCTION_ACK", "legacy-clinic")

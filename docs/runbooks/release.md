@@ -26,7 +26,9 @@ git checkout main && git pull --ff-only
 git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
 ```
 
-The tag push starts `deploy-production`. It needs the repository secret `RAILWAY_TOKEN` (a Railway
+The tag push starts `deploy-production`. A release commit is a fresh merge commit, so its own CI
+run starts at merge time; the job waits for `ci-gate` on that commit (up to 30 minutes) before
+deploying. It needs the `production` environment secret `RAILWAY_TOKEN` (a Railway
 project token scoped to `production`) and the variables `PROD_VOICE_GATEWAY_URL`, `PROD_CORE_API_URL`,
 `PROD_OPS_WORKER_URL`, `PROD_WEB_URL` for verification. Until the token exists, the same deploy runs
 from a clean checkout of the tag:
@@ -37,7 +39,9 @@ scripts/deploy-railway.sh production db-admin ops-worker voice-gateway core-api 
 ```
 
 Order matters and is fixed: `db-admin` (roles), `ops-worker` (migrations, then serve),
-`voice-gateway`, `core-api`, `web`. Each waits for the previous service's health check.
+`voice-gateway`, `core-api`, `web`. `railway up` returns when the build finishes, so the script
+then waits for each deployment to succeed and, for services with a public domain, for `/health`
+(or `/version.json`) to report this commit's tree before it starts the next service.
 
 ## Verify
 
@@ -75,5 +79,17 @@ Then, in the new environment:
 3. Confirm the new Postgres is **empty** (`report` prints `clinics: 0`). Production is never seeded.
 4. Public domains for voice-gateway, core-api and web; set `WASSUP_CORS_ORIGINS` on core-api and
    `VITE_API_BASE` on web to the production URLs; set `WASSUP_VOICE_WEBHOOK_URL` on ops-worker.
-5. Owner-only secrets: a production `WASSUP_RETELL_API_KEY` (separate workspace), Resend, Twilio
+5. After regenerating the passwords, run `db-admin` (bootstrap) **before** the app services, then
+   deploy the app services so their `${{db-admin.WASSUP_PASSWORD_*}}` references pick up the new
+   values. `WASSUP_VOICE_GATEWAY_URL` on ops-worker is the private-network name, the same in every
+   environment.
+6. Production values that differ from staging: `WASSUP_AI_LINE_NUMBERS`, `WASSUP_ALERT_EMAIL_FROM`,
+   `WASSUP_OPS_ALERT_EMAILS`, `WASSUP_TELEPHONY_MIN_BALANCE`, the canary variables, and the
+   Firebase settings (`WASSUP_FIREBASE_PROJECT_ID` on core-api, `VITE_FIREBASE_*` on web): until a
+   separate production Firebase project exists, production reuses the existing project with real
+   memberships only.
+7. Owner-only secrets: a production `WASSUP_RETELL_API_KEY` (separate workspace), Resend, Twilio
    monitor key, heartbeat URLs. Nothing from staging's copies is trusted for production.
+8. Protect the release path on GitHub: the `production` environment gets required reviewers and a
+   deployment-branch policy of `v*` tags only; the `protect-release-tags` ruleset already covers
+   `v*`.

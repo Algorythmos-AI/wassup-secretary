@@ -66,8 +66,16 @@ jobs:
   deploy-production:
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     environment: production
+    # One production deploy at a time, whatever triggered it (a tag push and a rollback dispatch
+    # are different refs and would otherwise interleave).
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -76,16 +84,25 @@ jobs:
       - name: Refuse anything that is not a release of main with green CI
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          tag="$(git describe --tags --exact-match HEAD)"
-          case "$tag" in v[0-9]*) ;; *) echo "not a v* tag: $tag"; exit 1 ;; esac
+          case "$TAG" in v[0-9]*) ;; *) echo "not a v* tag: $TAG"; exit 1 ;; esac
           sha="$(git rev-parse HEAD)"
-          git merge-base --is-ancestor "$sha" origin/main || { echo "$tag is not on main"; exit 1; }
-          grep -q "^## \[${tag#v}\]" CHANGELOG.md || { echo "CHANGELOG.md has no [${tag#v}] section"; exit 1; }
-          state="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs" \
-            --jq '[.check_runs[] | select(.name=="ci-gate")] | map(.conclusion) | first')"
-          [ "$state" = "success" ] || { echo "ci-gate for $sha is '$state', not success"; exit 1; }
-          echo "TAG=$tag" >> "$GITHUB_ENV"
+          [ "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "$sha" ] || { echo "$TAG does not point at the checked-out commit"; exit 1; }
+          git merge-base --is-ancestor "$sha" origin/main || { echo "$TAG is not on main"; exit 1; }
+          grep -qF "## [${TAG#v}]" CHANGELOG.md || { echo "CHANGELOG.md has no [${TAG#v}] section"; exit 1; }
+          # A release commit is a fresh merge commit: its CI may still be running. Wait for it.
+          for _ in $(seq 1 60); do
+            state="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs?check_name=ci-gate&per_page=50" \
+              --jq '[.check_runs[] | select(.app.slug=="github-actions")] | sort_by(.started_at) | last | "\(.status)/\(.conclusion)"')"
+            case "$state" in
+              completed/success) echo "ci-gate: success"; break ;;
+              completed/*) echo "ci-gate for $sha finished as '$state'"; exit 1 ;;
+              *) echo "ci-gate: $state, waiting"; sleep 30 ;;
+            esac
+          done
+          [ "$state" = "completed/success" ] || { echo "ci-gate did not finish in 30 min"; exit 1; }
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
           echo "TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_ENV"
       - name: Need a Railway project token
         env:
@@ -98,8 +115,8 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
-      - run: npm install -g @railway/cli@4
-      - name: Deploy ${{ env.TAG }} to production, in order
+      - run: npm install -g @railway/cli@4.40.0
+      - name: Deploy ${{ env.RELEASE_TAG }} to production, in order
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: scripts/deploy-railway.sh production db-admin ops-worker voice-gateway core-api web
@@ -113,7 +130,7 @@ jobs:
           fail=0
           for pair in "voice-gateway=$VOICE_GATEWAY_URL" "core-api=$CORE_API_URL" "ops-worker=$OPS_WORKER_URL"; do
             name="${pair%%=*}"; url="${pair#*=}"
-            [ -n "$url" ] || { echo "::warning::no PROD_*_URL variable for $name; skipped"; continue; }
+            [ -n "$url" ] || continue  # reported as an error below
             for _ in $(seq 1 30); do
               got="$(curl -fsS -m 10 "$url/health" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("tree",""))' 2>/dev/null || true)"
               [ "$got" = "$TREE" ] && break; sleep 10
@@ -121,11 +138,17 @@ jobs:
             if [ "$got" = "$TREE" ]; then echo "$name: ok ($TREE)"; else echo "::error::$name reports tree '$got', expected $TREE"; fail=1; fi
           done
           if [ -n "$WEB_URL" ]; then
-            got="$(curl -fsS -m 10 "$WEB_URL/version.json" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("build",""))' 2>/dev/null || true)"
+            for _ in $(seq 1 30); do
+              got="$(curl -fsS -m 10 "$WEB_URL/version.json" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("build",""))' 2>/dev/null || true)"
+              [ "$got" = "$TREE" ] && break; sleep 10
+            done
             if [ "$got" = "$TREE" ]; then echo "web: ok"; else echo "::error::web reports build '$got', expected $TREE"; fail=1; fi
           fi
+          for pair in "voice-gateway=$VOICE_GATEWAY_URL" "core-api=$CORE_API_URL" "ops-worker=$OPS_WORKER_URL" "web=$WEB_URL"; do
+            [ -n "${pair#*=}" ] || { echo "::error::PROD_*_URL for ${pair%%=*} is not set; verification would be incomplete"; fail=1; }
+          done
           exit $fail
       - name: Summary
         run: |
-          echo "Deployed ${TAG} (tree ${TREE}) to production." >> "$GITHUB_STEP_SUMMARY"
+          echo "Deployed ${RELEASE_TAG} (tree ${TREE}) to production." >> "$GITHUB_STEP_SUMMARY"
           echo "Rollback = re-run this workflow with the previous tag." >> "$GITHUB_STEP_SUMMARY"

@@ -18,7 +18,7 @@ cannot be run is recorded as **not run**, with the reason, and the release does 
 | 9 | Security | gitleaks, semgrep, zizmor; manual: 401 without token, 413 over body caps, no CORS for a foreign origin, `/docs` 404 in production, web CSP headers present on 200 and 404 | all clean |
 | 10 | Observability | a request with a synthetic caller name and number; read the logs | no personal data in logs; request/clinic/call ids present; Sentry (if enabled) has `send_default_pii=False` and no request bodies |
 | 11 | Heartbeats | every scheduled job has a heartbeat URL configured in production | Better Stack shows each job green |
-| 12 | Runbooks | go-live, release, phone-line-down, outbox-dead-letter, replay-exhausted, quarantine, legacy-import, restore-drill | each followed once end to end on staging |
+| 12 | Runbooks | go-live, release, phone-line-down, outbox-dead-letter, replay-exhausted, quarantine, legacy-import, and restore-drill once backups exist (B4) | each followed once end to end on staging |
 | 13 | Clock changes | tests at Sydney DST start (4 Oct 2026) and for a Brisbane clinic | local date/hour correct; canary claims one run per local day |
 | 14 | Rollback | deploy the previous tag to staging, then the current one again | both succeed; `/health` tree matches each time |
 

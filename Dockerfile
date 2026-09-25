@@ -3,14 +3,16 @@
 FROM python:3.12-slim-bookworm AS build
 ARG SERVICE
 COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /uvx /bin/
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
+# No BuildKit cache mount: Railway's builder only accepts cache mounts with a Railway-specific id,
+# and the final image never carries the cache either way (only /app is copied into it).
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never UV_NO_CACHE=1
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY libs ./libs
 COPY services ./services
 COPY db ./db
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --package "wassup-${SERVICE}"
+COPY deploy/entrypoint.sh ./deploy/entrypoint.sh
+RUN uv sync --frozen --no-dev --package "wassup-${SERVICE}"
 
 FROM python:3.12-slim-bookworm AS runtime
 ARG SERVICE
@@ -26,6 +28,5 @@ WORKDIR /app
 COPY --from=build --chown=app:app /app /app
 USER app
 EXPOSE 8080
-# 30 s graceful shutdown so in-flight voice tool calls finish during a deploy. uvicorn's own
-# access log is off: our structured request log never records query strings.
-CMD ["sh", "-c", "exec uvicorn $(echo ${SERVICE_MODULE} | tr - _).main:app --host 0.0.0.0 --port ${PORT:-8080} --timeout-graceful-shutdown 30 --no-server-header --no-access-log"]
+# Role (serve / bootstrap) and optional migrate-on-start come from the environment: see the script.
+CMD ["/app/deploy/entrypoint.sh"]

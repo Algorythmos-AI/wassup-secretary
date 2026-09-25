@@ -13,7 +13,7 @@ import httpx
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.app import create_app
-from wassup_core.backups import key_from_hex, store_from_env
+from wassup_core.backups import BackupError, Store, key_from_hex, store_from_env
 from wassup_core.db import make_engine
 
 from ops_worker import backup, canary, quarantine, replay, retention, telephony, usage, voice_config
@@ -47,6 +47,79 @@ def canary_config(settings: OpsWorkerSettings) -> canary.CanaryConfig:
 
 
 Job = tuple[str, float, Callable[[], Awaitable[object]], str]
+
+
+def backup_setup(
+    settings: OpsWorkerSettings,
+) -> tuple[backup.BackupMonitor | None, Store | None, bytes | None]:
+    """(monitor, store, key). No monitor when backups aren't configured at all. A configuration
+    that asks for backups but can't work gives a monitor that reports ``failing`` with the reason,
+    and never stops the rest of the worker."""
+    error: str | None = None
+    try:
+        store = store_from_env(dict(os.environ))
+    except BackupError:
+        store, error = None, "store_misconfigured"
+    wants_run = settings.backup_database_url is not None or settings.backup_key_hex is not None
+    if store is None and not wants_run and error is None:
+        return None, None, None
+    key: bytes | None = None
+    mode = "run" if wants_run else "watch"
+    if wants_run:
+        if settings.backup_database_url is None or settings.backup_key_hex is None:
+            error = error or "needs_both_database_url_and_key"
+        else:
+            try:
+                key = key_from_hex(settings.backup_key_hex.get_secret_value())
+            except BackupError:
+                error = error or "key_invalid"
+        if store is None:
+            error = error or "no_store"
+    monitor = backup.BackupMonitor(
+        backup.BackupConfig(
+            environment=settings.environment.value,
+            local_time=settings.backup_local_time,
+            timezone=settings.backup_timezone,
+            keep=settings.backup_keep,
+            ops_emails=settings.ops_emails,
+            heartbeat_url=settings.backup_heartbeat_url,
+            on_start=settings.backup_on_start,
+            mode=mode,
+        ),
+        config_error=error,
+    )
+    return monitor, store, key
+
+
+def _backup_job(app: FastAPI, settings: OpsWorkerSettings, sender: EmailSender) -> Job | None:
+    """The backup job: backs up in run mode, re-reads the store in watch mode."""
+    backups: backup.BackupMonitor | None = app.state.backup
+    backup_store: Store | None = app.state.backup_store
+    if backups is not None and backup_store is not None and backups.config_error is None:
+        live_backup, live_store = backups, backup_store
+        run_backup: Callable[[], Awaitable[dict[str, Any]]] | None = None
+        interval = backup.WATCH_INTERVAL_S
+        if backups.config.mode == "run":
+            backup_url = settings.backup_database_url.get_secret_value()  # type: ignore[union-attr]
+            backup_key: bytes = app.state.backup_key
+
+            async def run_backup_now() -> dict[str, Any]:
+                return await asyncio.to_thread(
+                    backup.backup_once,
+                    backup_url,
+                    backup_key,
+                    live_store,
+                    live_backup.config.environment,
+                    keep=live_backup.config.keep,
+                )
+
+            run_backup, interval = run_backup_now, 60.0
+
+        async def backup_job() -> str:
+            return await backup.tick(live_backup, live_store, run_backup, sender)
+
+        return ("backup", interval, backup_job, "")  # the heartbeat is pinged by the job
+    return None
 
 
 def _scheduled_jobs(
@@ -146,27 +219,9 @@ def _scheduled_jobs(
             )
         )
 
-    backups: backup.BackupMonitor | None = app.state.backup
-    if backups is not None:
-        live_backup = backups
-        backup_url = settings.backup_database_url.get_secret_value()  # type: ignore[union-attr]
-        backup_key = key_from_hex(settings.backup_key_hex.get_secret_value())  # type: ignore[union-attr]
-        backup_store = app.state.backup_store
-
-        async def run_backup() -> dict[str, Any]:
-            return await asyncio.to_thread(
-                backup.backup_once,
-                backup_url,
-                backup_key,
-                backup_store,
-                live_backup.config.environment,
-                keep=live_backup.config.keep,
-            )
-
-        async def backup_job() -> str:
-            return await backup.tick(live_backup, backup_store, run_backup, sender)
-
-        jobs.append(("backup", 60.0, backup_job, ""))  # heartbeat pinged by the job itself
+    backup_job = _backup_job(app, settings, sender)
+    if backup_job is not None:
+        jobs.append(backup_job)
 
     cfg: canary.CanaryConfig = app.state.canary_config
     live_retell: RetellApi | None = app.state.retell
@@ -194,22 +249,7 @@ def build_app(
     app.state.retell = retell
     install_probes(app.state)
     app.state.quarantine = quarantine.QuarantineMonitor(settings.ops_emails)
-    app.state.backup_store = store_from_env(dict(os.environ))
-    app.state.backup = (
-        backup.BackupMonitor(
-            backup.BackupConfig(
-                environment="production" if settings.is_production else settings.environment.value,
-                local_time=settings.backup_local_time,
-                timezone=settings.backup_timezone,
-                keep=settings.backup_keep,
-                ops_emails=settings.ops_emails,
-                heartbeat_url=settings.backup_heartbeat_url,
-                on_start=settings.backup_on_start,
-            )
-        )
-        if settings.backup_database_url and settings.backup_key_hex and app.state.backup_store
-        else None
-    )
+    app.state.backup, app.state.backup_store, app.state.backup_key = backup_setup(settings)
     app.state.voice_config = (
         voice_config.VoiceConfigMonitor(
             environment="production" if settings.is_production else "staging",

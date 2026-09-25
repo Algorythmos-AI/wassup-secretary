@@ -8,14 +8,25 @@ from the store and fully decrypted and checked, so ``verified`` means the stored
 to exactly what was dumped. ``db/restore.py`` is the other half; the drill is in
 ``docs/runbooks/restore-drill.md``.
 
-The job ticks every minute and runs once per local day after the configured time; the external
-heartbeat is pinged only after a verified backup, so a missed night pages someone.
+Two ways to run it:
+
+- **in ops-worker** (``run`` mode, when ops-worker has the backup role's URL and the key): the job
+  ticks every minute and backs up once per local day after the configured time;
+- **as a one-shot** ``WASSUP_ROLE=backup`` on a schedule (a cron service), which keeps the
+  all-clinics credential and the key out of the long-running worker. ops-worker then only
+  **watches** the store (``watch`` mode: store settings, no database URL or key) and reports
+  whether a fresh archive exists.
+
+Either way the external heartbeat is pinged only after a verified backup, so a missed night
+pages someone. An upload is written under a pending name and renamed only once the stored copy
+has been fetched back and verified, so nothing unverified ever looks like a backup.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -27,6 +38,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
 import psycopg
 from psycopg import sql
 from wassup_core.backups import (
@@ -36,9 +48,9 @@ from wassup_core.backups import (
     Store,
     TableEntry,
     archive_name,
+    archives_of,
     digest_file,
     key_from_hex,
-    parse_archive_name,
     prune,
     store_from_env,
     verify_archive,
@@ -54,6 +66,20 @@ log = get_logger(__name__)
 
 STALE_AFTER_S = 36 * 3600  # a nightly backup older than this is an incident
 REALERT_EVERY_S = 24 * 3600
+RETRY_AFTER_S = 3600  # after a failure, try again in an hour, not every minute
+WATCH_INTERVAL_S = 900.0
+PENDING_SUFFIX = ".pending"
+_TMP_PREFIX = "wassup-backup-"
+
+# Every dump and every restore check runs with the same output settings, so the bytes of a
+# table do not depend on the server's or the database's defaults (time zone above all).
+_PIN_SESSION = (
+    "SET LOCAL TimeZone = 'UTC'",
+    "SET LOCAL DateStyle = 'ISO, YMD'",
+    "SET LOCAL IntervalStyle = 'postgres'",
+    "SET LOCAL extra_float_digits = 3",
+    "SET LOCAL bytea_output = 'hex'",
+)
 
 _TABLES = """
 SELECT c.relname AS name,
@@ -89,17 +115,24 @@ def _plain_url(raw: str) -> str:
     return raw
 
 
+def pin_session(conn: psycopg.Connection[Any]) -> None:
+    """Inside a transaction: fix every setting that changes how values are written as text."""
+    for statement in _PIN_SESSION:
+        conn.execute(statement)
+
+
 def copy_out(name: str, columns: list[str], order_by: list[str]) -> sql.Composed:
-    """``COPY (SELECT cols FROM table ORDER BY key) TO STDOUT``: deterministic when keyed, so a
-    restore can be checked byte for byte; also what a restore recomputes."""
-    query = sql.SQL("COPY (SELECT {} FROM {}{}) TO STDOUT").format(
+    """``COPY (SELECT cols FROM table ORDER BY key) TO STDOUT``. Rows are ordered by the text of
+    the primary key under the C collation, so the order is the same on any server whatever its
+    locale; a restore recomputes exactly this and compares the bytes."""
+    order = sql.SQL(", ").join(
+        sql.SQL('{}::text COLLATE "C"').format(sql.Identifier(c)) for c in order_by
+    )
+    return sql.SQL("COPY (SELECT {} FROM {}{}) TO STDOUT").format(
         sql.SQL(", ").join(sql.Identifier(c) for c in columns),
         sql.Identifier("public", name),
-        sql.SQL(" ORDER BY {}").format(sql.SQL(", ").join(sql.Identifier(c) for c in order_by))
-        if order_by
-        else sql.SQL(""),
+        sql.SQL(" ORDER BY {}").format(order) if order_by else sql.SQL(""),
     )
-    return query
 
 
 def dump(url: str, tables_dir: Path, environment: str, *, set_role: str | None = None) -> Manifest:
@@ -117,6 +150,7 @@ def dump(url: str, tables_dir: Path, environment: str, *, set_role: str | None =
                     "backups run as a non-superuser role that bypasses row-level security "
                     "(wassup_backup); anything else would silently miss rows"
                 )
+            pin_session(conn)
             revision = conn.execute("SELECT version_num FROM alembic_version").fetchone()
             if revision is None:
                 raise BackupError("database has no schema revision")
@@ -154,6 +188,18 @@ def dump(url: str, tables_dir: Path, environment: str, *, set_role: str | None =
             )
 
 
+def _clear_stale_workdirs(max_age_s: float = 6 * 3600) -> None:
+    """A killed run leaves plaintext table files behind in its work directory: remove any older
+    than a backup could take."""
+    root = Path(tempfile.gettempdir())
+    for path in root.glob(f"{_TMP_PREFIX}*"):
+        try:
+            if path.is_dir() and time.time() - path.stat().st_mtime > max_age_s:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            continue
+
+
 def backup_once(
     url: str,
     key: bytes,
@@ -163,22 +209,33 @@ def backup_once(
     keep: int = 30,
     set_role: str | None = None,
 ) -> dict[str, Any]:
-    """Dump, encrypt, upload, fetch back and verify, then prune old archives. Blocking."""
+    """Dump, encrypt, upload under a pending name, fetch back and verify, then publish under the
+    archive's real name and prune. Blocking. Nothing unverified is ever left under a real name."""
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="wassup-backup-") as tmp:
+    _clear_stale_workdirs()
+    with tempfile.TemporaryDirectory(prefix=_TMP_PREFIX) as tmp:
         work = Path(tmp)
         manifest = dump(url, work / "tables", environment, set_role=set_role)
         name = archive_name(environment, manifest.alembic_revision)
+        pending = name + PENDING_SUFFIX
         archive = work / name
         size = write_archive(key, archive, manifest, work / "tables")
-        store.put(name, archive)
-        fetched = work / "fetched.wsb"
-        store.get(name, fetched)
-        if fetched.stat().st_size != size:
-            raise BackupError("stored archive size differs from what was uploaded")
-        stored = verify_archive(key, fetched)
-        if stored != manifest:
-            raise BackupError("stored archive does not match what was dumped")
+        shutil.rmtree(work / "tables")  # the plaintext is no longer needed
+        try:
+            store.put(pending, archive)
+            fetched = work / "fetched.wsb"
+            store.get(pending, fetched)
+            if fetched.stat().st_size != size:
+                raise BackupError("stored archive size differs from what was uploaded")
+            if verify_archive(key, fetched) != manifest:
+                raise BackupError("stored archive does not match what was dumped")
+            store.rename(pending, name)
+        except BaseException:
+            try:
+                store.delete(pending)
+            except Exception as exc:  # the original failure is what matters
+                log.warning("backup_pending_cleanup_failed", code=type(exc).__name__)
+            raise
         pruned = prune(store, environment, keep)
     return {
         "name": name,
@@ -205,6 +262,8 @@ class BackupConfig:
     ops_emails: list[str] = field(default_factory=list)
     heartbeat_url: str = ""
     on_start: bool = False
+    # "run": this process backs up; "watch": another process does, this one checks the store.
+    mode: str = "run"
 
     @property
     def zone(self) -> ZoneInfo:
@@ -223,35 +282,47 @@ class BackupMonitor:
     last_day: date | None = None
     primed: bool = False
     started_at: float = field(default_factory=time.time)
+    retry_after: float = 0.0
+    watch_alerted_at: float = 0.0
+    # Set when backups are asked for but can't work (bad key, half-set bucket, …).
+    config_error: str | None = None
 
     def report(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
+        if self.config_error:
+            return {"status": "failing", "reason": self.config_error, "mode": self.config.mode}
         if self.watch.latest is None:
             # Nothing yet: not failing until a whole cycle has passed since the worker started.
             stale = now - self.started_at > self.watch.stale_after_s
             return {"status": "failing" if stale else "pending", "reason": "no_backup_yet"}
-        return self.watch.report(now)
+        return {**self.watch.report(now), "mode": self.config.mode}
 
     def prime(self, store: Store) -> None:
-        """Learn the latest archive already in the store, so a restart neither repeats last
-        night's backup nor forgets that it happened."""
-        newest = None
-        for name in store.list():
-            parsed = parse_archive_name(name)
-            if parsed and parsed[0] == self.config.environment:
-                newest = (parsed[1], name)
-        if newest:
-            created, name = newest
+        """Learn the newest finished archive in the store: a restart then neither repeats last
+        night's backup nor forgets it happened; in watch mode this is the whole check."""
+        found = archives_of(store, self.config.environment)
+        if found:
+            created, name = found[-1]
             self.last_day = created.astimezone(self.config.zone).date()
             self.watch.latest = {
                 "status": "ok",
                 "name": name,
                 "last_backup_at": created.isoformat(),
-                "verified": None,  # verified when it was made; not re-checked here
                 "store": store.kind,
             }
             self.watch.last_success = created.timestamp()
         self.primed = True
+
+    def failed(self, reason: str, store_kind: str, now: float) -> bool:
+        """Record a failure; returns whether ops should be emailed now. The last good backup's
+        time is kept, so staleness is measured from it, not from the failure."""
+        last_good = self.watch.last_success
+        alert_due, _ = self.watch.record(
+            {"status": "failing", "reason": reason, "store": store_kind}
+        )
+        self.watch.last_success = last_good
+        self.retry_after = now + RETRY_AFTER_S
+        return alert_due
 
 
 def due(config: BackupConfig, last_day: date | None, now: datetime | None = None) -> bool:
@@ -262,30 +333,37 @@ def due(config: BackupConfig, last_day: date | None, now: datetime | None = None
 async def tick(
     monitor: BackupMonitor,
     store: Store,
-    run: Callable[[], Awaitable[dict[str, Any]]],
+    run: Callable[[], Awaitable[dict[str, Any]]] | None,
     email: EmailSender,
     now: datetime | None = None,
 ) -> str:
-    """Scheduled every minute: prime once, run when due, remember the outcome, alert on failure."""
-    if not monitor.primed:
-        await asyncio.to_thread(monitor.prime, store)
-    if not (monitor.config.on_start and monitor.watch.latest is None) and not due(
-        monitor.config, monitor.last_day, now
-    ):
-        return "idle"
+    """Scheduled job. Run mode: prime once, back up when due, remember the outcome, alert on a
+    failure and retry an hour later. Watch mode (``run`` is None): re-read the store."""
     started = now or datetime.now(UTC)
+    now_ts = started.timestamp()
+    try:
+        if run is None or not monitor.primed:
+            await asyncio.to_thread(monitor.prime, store)
+    except Exception as exc:  # an unreachable store is an incident too
+        return await _failure(monitor, email, f"store_{type(exc).__name__}", store.kind, now_ts)
+    if run is None:
+        status = str(monitor.report(now_ts)["status"])
+        if status == "failing" and now_ts - monitor.watch_alerted_at > REALERT_EVERY_S:
+            monitor.watch_alerted_at = now_ts
+            log.error("backup_stale", code="no_recent_archive")
+            await _alert(email, monitor.config.ops_emails, {"reason": "no_recent_archive"})
+        return status
+    if now_ts < monitor.retry_after:
+        return "idle"
+    first_run = monitor.config.on_start and monitor.watch.latest is None
+    if not first_run and not due(monitor.config, monitor.last_day, started):
+        return "idle"
     try:
         summary = await run()
     except Exception as exc:  # a failed backup is an incident, not a crash
-        report = {"status": "failing", "reason": type(exc).__name__, "store": store.kind}
-        alert_due, _ = monitor.watch.record(report)
-        # record() counts a failure as a "success" of the check; keep the last good time honest.
-        monitor.watch.last_success = monitor.watch.last_success if monitor.last_day else None
-        log.error("backup_failed", code=type(exc).__name__)
-        if alert_due:
-            await _alert(email, monitor.config.ops_emails, report)
-        return "failing"
+        return await _failure(monitor, email, type(exc).__name__, store.kind, now_ts)
     monitor.last_day = started.astimezone(monitor.config.zone).date()
+    monitor.retry_after = 0.0
     monitor.watch.record({"status": "ok", "last_backup_at": started.isoformat(), **summary})
     log.info(
         "backup_done", count=int(summary["rows"]), duration_ms=int(summary["duration_s"] * 1000)
@@ -294,16 +372,25 @@ async def tick(
     return "ok"
 
 
+async def _failure(
+    monitor: BackupMonitor, email: EmailSender, reason: str, store_kind: str, now_ts: float
+) -> str:
+    log.error("backup_failed", code=reason)
+    if monitor.failed(reason, store_kind, now_ts):
+        await _alert(email, monitor.config.ops_emails, {"reason": reason})
+    return "failing"
+
+
 async def _alert(email: EmailSender, ops_emails: list[str], report: dict[str, Any]) -> None:
     if not ops_emails:
         return
     body = "\n".join(
         [
-            "Tonight's database backup FAILED, so the newest restorable copy is yesterday's.",
+            "The database backup FAILED, so the newest restorable copy is an older one.",
             f"Reason: {report.get('reason', 'unknown')}",
             "",
-            "Check ops-worker's /health/backup and its logs (event backup_failed), then run a",
-            "backup by hand: docs/runbooks/restore-drill.md.",
+            "Check ops-worker's /health/backup and its logs (event backup_failed). It retries in",
+            "an hour; a backup by hand is described in docs/runbooks/restore-drill.md.",
         ]
     )
     try:
@@ -313,7 +400,8 @@ async def _alert(email: EmailSender, ops_emails: list[str], report: dict[str, An
 
 
 def main() -> int:
-    """``WASSUP_ROLE=backup``: one backup now, then exit (used by the drill and by hand)."""
+    """``WASSUP_ROLE=backup``: one backup now, then exit (a cron service, a drill, or by hand).
+    Pings ``WASSUP_BACKUP_HEARTBEAT_URL`` after a verified backup."""
     env = os.environ
     url = env.get("WASSUP_BACKUP_DATABASE_URL", "")
     key_hex = env.get("WASSUP_BACKUP_KEY_HEX", "")
@@ -332,10 +420,22 @@ def main() -> int:
             environment,
             keep=int(env.get("WASSUP_BACKUP_KEEP", "30")),
         )
-    except (BackupError, psycopg.Error, OSError) as exc:
+    except (BackupError, OSError, ValueError) as exc:
         print(f"backup failed: {exc}", file=sys.stderr)
         return 1
+    except psycopg.Error as exc:  # never echo a database message: it can quote a row
+        print(f"backup failed: database error {type(exc).__name__}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # e.g. the bucket client: its message is ours to print, not data
+        print(f"backup failed: {type(exc).__name__}", file=sys.stderr)
+        return 1
     print(" ".join(f"{k}={v}" for k, v in summary.items()))
+    heartbeat = env.get("WASSUP_BACKUP_HEARTBEAT_URL", "")
+    if heartbeat:
+        try:
+            httpx.get(heartbeat, timeout=5.0)
+        except httpx.HTTPError:
+            print("heartbeat failed", file=sys.stderr)
     return 0
 
 

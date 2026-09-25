@@ -271,8 +271,9 @@ def test_backup_role_bypasses_rls_but_can_only_read(db_engine: Engine) -> None:
         bypassing = (
             conn.execute(
                 text(
+                    # Every role, whatever its name, except superusers and Postgres's own.
                     "SELECT rolname FROM pg_roles WHERE rolbypassrls AND NOT rolsuper "
-                    "AND rolname LIKE 'wassup%' OR rolname LIKE 'app_%' AND rolbypassrls"
+                    "AND left(rolname, 3) <> 'pg_'"
                 )
             )
             .scalars()

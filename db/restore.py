@@ -10,16 +10,21 @@ with the manifest before commit. A dry run does all of that and rolls back.
     WASSUP_BACKUP_KEY_HEX       the key the archive was made with
     WASSUP_RESTORE_PATH         a local archive file, or
     WASSUP_RESTORE_NAME         an archive in the store (WASSUP_BACKUP_S3_* / WASSUP_BACKUP_DIR),
+                                or "latest" (the newest from WASSUP_RESTORE_SOURCE)
+    WASSUP_RESTORE_SOURCE       the environment the archive must come from (required: a staging
+                                archive is never restored by mistake where production was meant)
                                 or "latest"
     WASSUP_RESTORE_APPLY        "true" to commit; otherwise a dry run
     WASSUP_RESTORE_TRUNCATE     "true" to empty every table in the archive first (destructive)
-    WASSUP_PRODUCTION_ACK       in production, an apply also needs this set to the database name
+    WASSUP_PRODUCTION_ACK       in production, an apply or a truncate (even in a dry run, which
+                                locks every table while it runs) needs this set to the database name
 
 Output is table names and counts only.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import tempfile
@@ -27,12 +32,13 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+from ops_worker.backup import copy_out, pin_session
 from psycopg import sql
 from wassup_core.backups import (
     BackupError,
     Manifest,
-    digest_file,
     key_from_hex,
+    latest_archive,
     read_archive,
     store_from_env,
     table_member,
@@ -71,20 +77,14 @@ def _columns(conn: psycopg.Connection[Any], table: str) -> list[str]:
 def _copy_out_sha(
     conn: psycopg.Connection[Any], table: str, columns: list[str], order_by: list[str]
 ) -> tuple[str, int]:
-    query = sql.SQL("COPY (SELECT {} FROM {}{}) TO STDOUT").format(
-        sql.SQL(", ").join(sql.Identifier(c) for c in columns),
-        sql.Identifier("public", table),
-        sql.SQL(" ORDER BY {}").format(sql.SQL(", ").join(sql.Identifier(c) for c in order_by))
-        if order_by
-        else sql.SQL(""),
-    )
-    with tempfile.NamedTemporaryFile() as out:
-        with conn.cursor().copy(query) as copy:
-            for chunk in copy:
-                out.write(chunk)
-        out.flush()
-        sha, _size, rows = digest_file(Path(out.name))
-    return sha, rows
+    """The table as the backup wrote it (same query, same pinned settings), hashed in a stream."""
+    sha, rows = hashlib.sha256(), 0
+    with conn.cursor().copy(copy_out(table, columns, order_by)) as copy:
+        for chunk in copy:
+            data = bytes(chunk)
+            sha.update(data)
+            rows += data.count(b"\n")
+    return sha.hexdigest(), rows
 
 
 def _refuse_unless_compatible(
@@ -165,6 +165,7 @@ def run(
         try:
             with conn.transaction():
                 conn.execute("SET LOCAL lock_timeout = '10s'")
+                pin_session(conn)  # read and re-written exactly as the backup wrote them
                 non_empty = _refuse_unless_compatible(conn, manifest, truncate=truncate)
                 # The snapshot was consistent: load without re-checking keys or firing triggers
                 # (the audit chain heads are restored as data, so the chain stays verifiable).
@@ -196,37 +197,48 @@ def main() -> int:
     apply = env.get("WASSUP_RESTORE_APPLY") == "true"
     truncate = env.get("WASSUP_RESTORE_TRUNCATE") == "true"
     production = env.get("WASSUP_ENVIRONMENT", "") not in ("local", "test", "staging")
+    source = env.get("WASSUP_RESTORE_SOURCE", "").strip()
+    if not source:
+        print("WASSUP_RESTORE_SOURCE (the archive's environment) is required", file=sys.stderr)
+        return 2
     try:
         key = key_from_hex(key_hex)
         with tempfile.TemporaryDirectory(prefix="wassup-restore-") as tmp:
             work = Path(tmp)
-            archive = _fetch(env, work)
+            archive = _fetch(env, work, source)
             manifest = read_archive(key, archive, work / "unpacked")
+            if manifest.environment != source:
+                raise RestoreRefused(
+                    f"the archive is from {manifest.environment!r}, not {source!r}"
+                )
             print(
                 f"archive={archive.name} archive_environment={manifest.environment} "
                 f"revision={manifest.alembic_revision} tables={len(manifest.tables)} "
                 f"rows={manifest.total_rows} verified=true"
             )
-            if apply and production:
+            if (apply or truncate) and production:
                 with psycopg.connect(_url(admin_url)) as conn:
                     dbname = conn.execute("SELECT current_database()").fetchone()[0]  # type: ignore[index]
                 if env.get("WASSUP_PRODUCTION_ACK") != dbname:
                     print(
-                        "restore refused: applying in production needs WASSUP_PRODUCTION_ACK set "
-                        f"to the target database name ({dbname!r})",
+                        "restore refused: applying or truncating in production needs "
+                        f"WASSUP_PRODUCTION_ACK set to the target database name ({dbname!r})",
                         file=sys.stderr,
                     )
                     return 2
             counts = run(admin_url, manifest, work / "unpacked", apply=apply, truncate=truncate)
-    except (BackupError, RestoreRefused, psycopg.Error, OSError) as exc:
+    except (BackupError, RestoreRefused, OSError) as exc:
         print(f"restore refused: {exc}", file=sys.stderr)
+        return 1
+    except psycopg.Error as exc:  # never echo a database message: it can quote a row
+        print(f"restore refused: database error {type(exc).__name__}", file=sys.stderr)
         return 1
     print(" ".join(f"{name}={rows}" for name, rows in counts.items()))
     print("committed" if apply else "dry run: loaded and verified, then rolled back")
     return 0
 
 
-def _fetch(env: os._Environ[str], work: Path) -> Path:
+def _fetch(env: os._Environ[str], work: Path, source: str) -> Path:
     path = env.get("WASSUP_RESTORE_PATH", "")
     if path:
         return Path(path)
@@ -239,10 +251,10 @@ def _fetch(env: os._Environ[str], work: Path) -> Path:
             "WASSUP_RESTORE_NAME needs a store (WASSUP_BACKUP_S3_* or WASSUP_BACKUP_DIR)"
         )
     if name == "latest":
-        names = store.list()
-        if not names:
-            raise BackupError("the store holds no archives")
-        name = names[-1]
+        newest = latest_archive(store, source)
+        if newest is None:
+            raise BackupError(f"the store holds no {source} archives")
+        name = newest
     dest = work / name
     store.get(name, dest)
     return dest

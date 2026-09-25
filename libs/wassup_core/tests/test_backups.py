@@ -87,6 +87,29 @@ def test_every_kind_of_tampering_is_refused(monkeypatch: pytest.MonkeyPatch) -> 
     assert "corrupt" in refuse(bytes(cleared) + first)
 
 
+def test_an_absurd_frame_length_is_refused_before_allocating() -> None:
+    header = backups.MAGIC + b"\x00" * backups.SALT_BYTES + (0x7FFFFFFF).to_bytes(4, "big")
+    with pytest.raises(BackupError, match="corrupt"):
+        decrypt_stream(KEY, io.BytesIO(header + b"x" * 16), io.BytesIO())
+
+
+def test_pending_uploads_and_other_environments_are_not_archives(tmp_path: Path) -> None:
+    store = DirectoryStore(tmp_path / "store")
+    src = tmp_path / "x"
+    src.write_bytes(b"x")
+    older = archive_name("test", "0013", datetime(2026, 9, 1, 3, 30, tzinfo=UTC))
+    newer = archive_name("test", "0013", datetime(2026, 9, 2, 3, 30, tzinfo=UTC))
+    other = archive_name("zeta", "0013", datetime(2026, 9, 9, 3, 30, tzinfo=UTC))
+    for name in (older, newer + ".pending", other):
+        store.put(name, src)
+    assert backups.latest_archive(store, "test") == older  # the pending one is not an archive
+    store.rename(newer + ".pending", newer)
+    assert backups.latest_archive(store, "test") == newer
+    assert backups.latest_archive(store, "zeta") == other
+    assert backups.latest_archive(store, "nowhere") is None
+    assert parse_archive_name(archive_name("test", "0013_x", datetime(2026, 9, 1, tzinfo=UTC)))
+
+
 def _manifest(tmp_path: Path, rows: bytes = b"1\tx\n2\ty\n") -> tuple[Manifest, Path]:
     tables = tmp_path / "tables"
     tables.mkdir(exist_ok=True)

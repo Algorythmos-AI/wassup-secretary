@@ -16,10 +16,27 @@ recorded in `docs/readiness/<date>.md` (item 7).
   every sequence's position. Row counts and hashes are what a restore is checked against.
 - It is taken in one REPEATABLE READ snapshot as `wassup_backup`: the one database role that
   bypasses row-level security, and one that can only SELECT (`tests/tenancy` pins both).
-- `verified: true` in the health report means the copy **in the store** was fetched back,
-  decrypted and matched the manifest. It does not mean it was restored; that is the drill.
+- An upload is written as `<name>.pending`, fetched back, decrypted and checked against the
+  manifest, and only then renamed to its real name. Anything under a real name was verified in
+  the store; a failed attempt removes its pending upload. Verified is not restored: that is the
+  drill.
+- Every dump and every restore check pins the session's output settings (UTC, ISO dates) and
+  orders rows by the text of the primary key under the C collation, so an archive restores and
+  checks identically on a server with another time zone or locale.
 
-## Configuration (ops-worker)
+## Where it runs
+
+- **Production: a cron service.** A service `backup` (the ops-worker image) with
+  `WASSUP_ROLE=backup`, the backup variables below and a cron schedule of `30 16 * * *` (UTC,
+  so 02:30 or 03:30 in Sydney). It backs up, pings `WASSUP_BACKUP_HEARTBEAT_URL`, and exits.
+  The all-clinics database credential and the key then live only in that service. ops-worker
+  gets **only the store variables** and watches: `/health/backup` is failing when no archive
+  under 36 hours old is in the store, and ops is emailed once a day while that lasts.
+- **Staging or small setups: in ops-worker.** Give ops-worker the database URL and key as well,
+  and it backs up once a day after `WASSUP_BACKUP_LOCAL_TIME` itself.
+- After a failure the next attempt is an hour later, not every minute.
+
+## Configuration
 
 | Variable | Meaning |
 |---|---|
@@ -32,7 +49,11 @@ recorded in `docs/readiness/<date>.md` (item 7).
 | `WASSUP_BACKUP_HEARTBEAT_URL` | pinged after a **verified** backup only, so a missed night pages |
 | `WASSUP_BACKUP_ON_START` | `true` to also back up when the worker starts (useful for a drill) |
 
-`GET /health/backup` on ops-worker: `ok` (last backup verified, under 36 h old), `pending` (the
+A setting that asks for backups but can't work (a bucket without its keys, a malformed key, a
+database URL without a key) never stops ops-worker: `/health/backup` reports `failing` with the
+reason (`store_misconfigured`, `key_invalid`, `needs_both_database_url_and_key`, `no_store`).
+
+`GET /health/backup` on ops-worker: `ok` (newest archive under 36 h old), `pending` (the
 worker started less than 36 h ago and hasn't run one yet), `failing` (503: the last run failed
 or none for 36 h), `unconfigured` (503). Monitor it. A failure also emails ops once a day.
 
@@ -52,7 +73,9 @@ the archive and the procedure on a throwaway database.
    same commit the archive was taken with.
 2. **Point db-admin at the drill database** and set: `WASSUP_ROLE=restore`,
    `WASSUP_BACKUP_KEY_HEX`, the store variables (or upload the archive and set
-   `WASSUP_RESTORE_PATH`), `WASSUP_RESTORE_NAME=latest` (or a name), `WASSUP_ENVIRONMENT=staging`.
+   `WASSUP_RESTORE_PATH`), `WASSUP_RESTORE_SOURCE=<environment the archive is from>`,
+   `WASSUP_RESTORE_NAME=latest` (the newest archive **from that environment**, by its time) or
+   a name, and `WASSUP_ENVIRONMENT=staging`. An archive from another environment is refused.
 3. **Dry run** (no `WASSUP_RESTORE_APPLY`): deploy `db-admin`. The log ends
    `dry run: loaded and verified, then rolled back` with per-table counts. Anything else is a
    finding: fix it before relying on the backups.
@@ -71,7 +94,8 @@ provider); recovery time 4 h from decision to a booted app.
 
 Same tool, into the production database, after these decisions are written down: which archive,
 why the current data is unrecoverable, who approved. Then `WASSUP_ENVIRONMENT=production`
-requires `WASSUP_PRODUCTION_ACK=<database name>` on the apply, `WASSUP_RESTORE_TRUNCATE=true`
+requires `WASSUP_PRODUCTION_ACK=<database name>` on the apply (and on any run with truncate,
+even a dry run, because truncating locks every table while it runs), `WASSUP_RESTORE_TRUNCATE=true`
 if the database is not empty, and voice-gateway must be **stopped first** so nothing is written
 during the load (a restore is one transaction; anything written after the archive was taken is
 gone — replay from the voice provider covers calls, not staff actions).
@@ -83,5 +107,9 @@ gone — replay from the voice provider covers calls, not staff actions).
 - Every table except `alembic_version` is in the archive; both clinics' rows are present.
 - Tampering of any kind (wrong key, flipped byte, truncation, reordering, appended data) is
   refused whole; a store that returns different bytes fails the backup.
-- A restore refuses a different schema revision or a non-empty target, and rolls back if any
-  table's rows or bytes differ from the manifest after loading.
+- A restore refuses a different schema revision, a non-empty target, or an archive from another
+  environment than named, and rolls back if any table's rows or bytes differ from the manifest
+  after loading. It restores identically into a server with another time zone.
+- An unverified upload never appears under an archive name, so it is never taken for a backup,
+  restored as `latest`, or counted when pruning.
+- Database errors are reported by class only (their messages can quote rows).

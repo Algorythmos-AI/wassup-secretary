@@ -19,6 +19,7 @@ import io
 import json
 import os
 import re
+import shutil
 import tarfile
 import tempfile
 from collections.abc import Mapping
@@ -39,7 +40,7 @@ CHUNK_BYTES = 4 * 1024 * 1024
 FINAL_FLAG = 0x8000_0000
 KEY_INFO = b"wassup-backup-v1"
 NAME_RE = re.compile(
-    r"^wassup-(?P<env>[a-z0-9-]+)-(?P<stamp>\d{8}T\d{6}Z)-r(?P<rev>[0-9a-f]+)\.wsb$"
+    r"^wassup-(?P<env>[a-z0-9-]+)-(?P<stamp>\d{8}T\d{6}Z)-r(?P<rev>[0-9A-Za-z_]+)\.wsb$"
 )
 _TABLE_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
@@ -103,7 +104,10 @@ def decrypt_stream(key: bytes, source: BinaryIO, dest: BinaryIO) -> int:
     while True:
         header = int.from_bytes(_read_exactly(source, 4), "big")
         final = bool(header & FINAL_FLAG)
-        ciphertext = _read_exactly(source, header & ~FINAL_FLAG)
+        length = header & ~FINAL_FLAG
+        if length > CHUNK_BYTES + 16:  # never allocate what a real frame can't be
+            raise BackupError("archive is corrupt or the key is wrong")
+        ciphertext = _read_exactly(source, length)
         try:
             plain = aead.decrypt(index.to_bytes(12, "big"), ciphertext, _aad(salt, index, final))
         except InvalidTag as exc:
@@ -287,6 +291,7 @@ class Store(Protocol):
 
     def put(self, name: str, path: Path) -> None: ...
     def get(self, name: str, dest: Path) -> None: ...
+    def rename(self, name: str, new_name: str) -> None: ...
     def list(self) -> list[str]: ...
     def delete(self, name: str) -> None: ...
 
@@ -301,14 +306,17 @@ class DirectoryStore:
     def put(self, name: str, path: Path) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         tmp = self.root / (name + ".part")
-        tmp.write_bytes(path.read_bytes())
+        shutil.copyfile(path, tmp)
         os.replace(tmp, self.root / name)
 
     def get(self, name: str, dest: Path) -> None:
         try:
-            dest.write_bytes((self.root / name).read_bytes())
+            shutil.copyfile(self.root / name, dest)
         except FileNotFoundError as exc:
             raise BackupError(f"no archive named {name}") from exc
+
+    def rename(self, name: str, new_name: str) -> None:
+        os.replace(self.root / name, self.root / new_name)
 
     def list(self) -> list[str]:
         if not self.root.is_dir():
@@ -351,6 +359,15 @@ class S3Store:
 
     def get(self, name: str, dest: Path) -> None:
         self._client().download_file(self.bucket, self._key(name), str(dest))
+
+    def rename(self, name: str, new_name: str) -> None:
+        client = self._client()
+        client.copy_object(
+            Bucket=self.bucket,
+            Key=self._key(new_name),
+            CopySource={"Bucket": self.bucket, "Key": self._key(name)},
+        )
+        client.delete_object(Bucket=self.bucket, Key=self._key(name))
 
     def list(self) -> list[str]:
         client = self._client()
@@ -404,9 +421,25 @@ def store_from_env(env: Mapping[str, str]) -> Store | None:
     return None
 
 
+def archives_of(store: Store, environment: str) -> list[tuple[datetime, str]]:
+    """This environment's finished archives, oldest first (by the time in the name). Uploads in
+    progress or never verified carry another suffix and are not archives."""
+    found = []
+    for name in store.list():
+        parsed = parse_archive_name(name)
+        if parsed and parsed[0] == environment:
+            found.append((parsed[1], name))
+    return sorted(found)
+
+
+def latest_archive(store: Store, environment: str) -> str | None:
+    found = archives_of(store, environment)
+    return found[-1][1] if found else None
+
+
 def prune(store: Store, environment: str, keep: int) -> list[str]:
     """Delete this environment's archives beyond the newest ``keep``. Returns what was deleted."""
-    mine = [n for n in store.list() if (p := parse_archive_name(n)) and p[0] == environment]
+    mine = [name for _created, name in archives_of(store, environment)]
     doomed = mine[:-keep] if keep > 0 and len(mine) > keep else []
     for name in doomed:
         store.delete(name)

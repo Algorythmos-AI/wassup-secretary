@@ -8,6 +8,8 @@
 #   WASSUP_ROLE=report            print counts only (no personal data) and exit
 #   WASSUP_ROLE=import-legacy     import one clinic's legacy history (db/import_legacy.py; a
 #                                 dry run unless WASSUP_IMPORT_APPLY=true) and exit
+#   WASSUP_ROLE=import-patients   upsert one clinic's patient list (db/import_patients.py; a dry
+#                                 run unless WASSUP_PATIENTS_APPLY=true) and exit
 #   WASSUP_ROLE=load-classifier-rules | activate-classifier-rules | reclassify
 #                                 a clinic's classification rules (db/classifier_rules.py) and exit
 #   WASSUP_MIGRATE_ON_START=true  (serve) apply migrations before starting — for platforms where
@@ -27,6 +29,9 @@ case "${WASSUP_ROLE:-serve}" in
     ;;
   import-legacy)
     exec python db/import_legacy.py
+    ;;
+  import-patients)
+    exec python db/import_patients.py
     ;;
   load-classifier-rules|activate-classifier-rules|reclassify)
     exec python db/classifier_rules.py

@@ -16,7 +16,9 @@ was passed on, or a callback arranged, unless the tool said so.
 | `{"ok": false, "error": "invalid_arguments"}` | The agent sent something malformed. | Re-ask for the missing detail. |
 | `{"ok": true, "synthetic": true}` | A line-check call. Nothing is stored. | (Line-check agent only.) |
 | `{"matched": true, "patient_ref": "…"}` | Exactly one living patient matched. `patient_ref` is opaque. It is never a name. | Continue as a known patient. Don't read back personal details. |
-| `{"matched": false}` (optionally `"reason"` or `"degraded"`) | No match, or several matches, or the patient is deceased, or the lookup limit was reached, or the database was unavailable. All look the same **on purpose**. | Continue as a new or unverified caller. |
+| `{"matched": false}` (optionally `"reason"` or `"degraded"`) | No match, or several matches, or the patient is deceased, or a lookup limit was reached (2 per call, 5 per caller number per day), or the caller ID is withheld, or the database was unavailable. All look the same **on purpose**. | Continue as a new or unverified caller. |
+| `{"matched": true, "patient_ref": "…", "verified": true}` | Exactly one living patient matches **and** the caller's number is the number on that patient's record (compared in one canonical `+61…` form; caller ID is not proof of identity). | The agent may refer to patient-specific, non-clinical facts. |
+| `{"matched": true, "patient_ref": "…", "verified": false}` | Exactly one living patient matches, but the caller's number is not the one on file. | Treat as unverified: take a message; say nothing patient-specific. |
 
 ## Guarantees behind the responses
 

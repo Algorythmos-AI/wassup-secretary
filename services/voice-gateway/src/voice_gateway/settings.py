@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from pydantic import SecretStr
 from wassup_core.settings import BaseServiceSettings
 
@@ -19,6 +21,15 @@ class VoiceGatewaySettings(BaseServiceSettings):
     db_statement_timeout_ms: int = 1000
     # Hard budget for a voice tool call; past it the caller hears the tool's fallback line.
     tool_budget_ms: int = 1500
+
+    @property
+    def caller_hash_secret(self) -> str:
+        """Keys the per-caller lookup counter's hash. Derived from the voice provider key, which
+        the gateway already holds and which is rotated rarely (a rotation restarts the 24-hour
+        counters once, which is harmless). Empty when unconfigured: then every caller key is
+        None and lookups are refused as withheld, never counted against a guessable value."""
+        primary = self.retell_api_key.get_secret_value() if self.retell_api_key else ""
+        return hashlib.sha256(b"caller-key:" + primary.encode()).hexdigest() if primary else ""
 
     @property
     def retell_keys(self) -> list[str]:

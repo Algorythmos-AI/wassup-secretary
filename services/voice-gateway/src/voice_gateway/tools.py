@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import time
 import uuid
@@ -35,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from wassup_core.db import clinic_scope, unscoped
 from wassup_core.http import problem
 from wassup_core.logging import get_logger
+from wassup_core.phone import canonical_phone
 
 from voice_gateway import store
 from voice_gateway.settings import VoiceGatewaySettings
@@ -44,6 +46,8 @@ router = APIRouter()
 log = get_logger(__name__)
 
 MAX_LOOKUPS_PER_CALL = 2
+# Across calls: one caller number may not probe the patient list more than this in a day.
+MAX_LOOKUPS_PER_CALLER_PER_DAY = 5
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,19 @@ class ToolContext:
     clinic_id: uuid.UUID
     call_id: str
     dedupe_key: str
+    # The caller's number in canonical form (None = withheld or unusable) and its keyed hash.
+    from_number: str | None = None
+    caller_key: str | None = None
+
+
+def caller_key(secret: str, number: str | None) -> str | None:
+    """A keyed hash of the caller's canonical number: enough to count lookups per caller, and
+    nothing a reader of the table could turn back into a number. None when there is no usable
+    caller ID (withheld, a provider's "anonymous" marker, or a shape we can't place)."""
+    canonical = canonical_phone(number)
+    if canonical is None:
+        return None
+    return hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
 
 
 class CaptureMessageArgs(BaseModel):
@@ -116,21 +133,43 @@ async def create_promise(ctx: ToolContext, args: CreatePromiseArgs) -> dict[str,
 
 async def lookup_patient(ctx: ToolContext, args: LookupPatientArgs) -> dict[str, Any]:
     """Privacy-first lookup: exact match only; never returns names; a deceased patient is
-    indistinguishable from no match; at most MAX_LOOKUPS_PER_CALL per call."""
+    indistinguishable from no match; at most MAX_LOOKUPS_PER_CALL per call and
+    MAX_LOOKUPS_PER_CALLER_PER_DAY per caller number; refused when the caller ID is withheld.
+    ``verified`` is true only when the caller is ringing from the number on the patient's
+    record: the agent may say patient-specific things only then."""
+    if not ctx.from_number or not ctx.caller_key:
+        return {"matched": False, "reason": "caller_id_withheld"}
+    # Count-then-claim is a race between concurrent calls from one number: serialise per caller
+    # (transaction-scoped lock; the claim row is written in this same transaction).
+    await ctx.conn.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext('lookup:' || :k))"), {"k": ctx.caller_key}
+    )
     prior = await ctx.conn.execute(
         text(
-            "SELECT count(*) FROM tool_invocations "
-            "WHERE provider_call_id = :call_id AND tool = 'lookup_patient' AND dedupe_key <> :dedupe"
+            "SELECT count(*) FILTER (WHERE provider_call_id = :call_id) AS this_call, "
+            "count(*) AS this_caller FROM tool_invocations "
+            "WHERE clinic_id = :clinic_id AND tool = 'lookup_patient' AND dedupe_key <> :dedupe "
+            "AND (provider_call_id = :call_id "
+            "     OR (caller_key = :caller AND created_at > now() - interval '24 hours'))"
         ),
-        {"call_id": ctx.call_id, "dedupe": ctx.dedupe_key},
+        {
+            "call_id": ctx.call_id,
+            "dedupe": ctx.dedupe_key,
+            "clinic_id": ctx.clinic_id,
+            "caller": ctx.caller_key,
+        },
     )
-    if int(prior.scalar_one()) >= MAX_LOOKUPS_PER_CALL:
+    counts = prior.mappings().one()
+    if int(counts["this_call"]) >= MAX_LOOKUPS_PER_CALL:
+        return {"matched": False, "reason": "limit_reached"}
+    if int(counts["this_caller"]) >= MAX_LOOKUPS_PER_CALLER_PER_DAY:
+        log.warning("lookup_caller_limit", call_id=ctx.call_id, clinic_id=str(ctx.clinic_id))
         return {"matched": False, "reason": "limit_reached"}
     rows = (
         await ctx.conn.execute(
             text(
                 """
-                SELECT id, is_deceased FROM patients
+                SELECT id, is_deceased, phone FROM patients
                 WHERE clinic_id = :clinic_id AND date_of_birth = :dob
                   AND lower(last_name) = lower(:last) AND lower(first_name) = lower(:first)
                 LIMIT 2
@@ -146,7 +185,11 @@ async def lookup_patient(ctx: ToolContext, args: LookupPatientArgs) -> dict[str,
     ).all()
     if len(rows) != 1 or rows[0].is_deceased:
         return {"matched": False}
-    return {"matched": True, "patient_ref": str(rows[0].id)}
+    return {
+        "matched": True,
+        "patient_ref": str(rows[0].id),
+        "verified": ctx.from_number == canonical_phone(rows[0].phone),
+    }
 
 
 @dataclass(frozen=True)
@@ -188,10 +231,14 @@ async def _invoke(
     parsed_args: BaseModel,
     payload: dict[str, Any],
     ai_lines: frozenset[str],
+    hash_secret: str,
 ) -> dict[str, Any]:
     call_id = str(call["call_id"])
     agent_id = call.get("agent_id") if isinstance(call.get("agent_id"), str) else None
     to_number = call.get("to_number") if isinstance(call.get("to_number"), str) else None
+    raw_from = call.get("from_number") if isinstance(call.get("from_number"), str) else None
+    from_number = canonical_phone(raw_from[:32] if raw_from else None)
+    caller = caller_key(hash_secret, from_number) if tool == "lookup_patient" else None
     key = dedupe_key(call_id, tool, raw_args)
 
     # 1. Synthetic line checks touch nothing. Otherwise commit the raw request before anything
@@ -240,13 +287,20 @@ async def _invoke(
         claimed = await conn.execute(
             text(
                 """
-                INSERT INTO tool_invocations (clinic_id, provider_call_id, tool, dedupe_key, args_hash)
-                VALUES (:clinic_id, :call_id, :tool, :key, :key)
+                INSERT INTO tool_invocations
+                  (clinic_id, provider_call_id, tool, dedupe_key, args_hash, caller_key)
+                VALUES (:clinic_id, :call_id, :tool, :key, :key, :caller)
                 ON CONFLICT (dedupe_key) DO NOTHING
                 RETURNING id
                 """
             ),
-            {"clinic_id": clinic_id, "call_id": call_id, "tool": tool, "key": key},
+            {
+                "clinic_id": clinic_id,
+                "call_id": call_id,
+                "tool": tool,
+                "key": key,
+                "caller": caller,
+            },
         )
         invocation_id = claimed.scalar()
         if invocation_id is None:  # a retry: return what the first attempt answered
@@ -258,7 +312,9 @@ async def _invoke(
                 await store.complete_tool_request(conn, key, "duplicate", clinic_id)
             log.info("tool_replayed", tool=tool, call_id=call_id)
             return dict(result) if isinstance(result, dict) else spec.fallback
-        result = await spec.handler(ToolContext(conn, clinic_id, call_id, key), parsed_args)
+        result = await spec.handler(
+            ToolContext(conn, clinic_id, call_id, key, from_number, caller), parsed_args
+        )
         await conn.execute(
             text(
                 "UPDATE tool_invocations SET result = CAST(:result AS jsonb), latency_ms = :ms WHERE id = :id"
@@ -315,6 +371,7 @@ async def retell_tool(request: Request, clinic_slug: str, tool: str) -> JSONResp
                 parsed_args=parsed_args,
                 payload=payload,
                 ai_lines=settings.ai_lines,
+                hash_secret=settings.caller_hash_secret,
             )
     except TimeoutError:
         log.error("tool_degraded", tool=tool, call_id=call["call_id"], reason="timeout")

@@ -32,20 +32,22 @@ import hashlib
 import io
 import json
 import os
-import re
 import sys
 import uuid
 from datetime import date, datetime
 from typing import Any
-from urllib.request import urlopen
+from urllib.parse import urlsplit
 
+import httpx
 import psycopg
 from psycopg.rows import dict_row
+from wassup_core.phone import canonical_phone
 
 COLUMNS = ("source_pms_id", "first_name", "last_name", "date_of_birth", "phone", "is_deceased")
 TRUE = {"true", "yes", "y", "1", "t", "deceased"}
 FALSE = {"", "false", "no", "n", "0", "f"}
 MAX_ROWS = 200_000
+MAX_FILE_BYTES = 64 * 1024 * 1024
 
 
 class ImportRefused(Exception):
@@ -53,9 +55,14 @@ class ImportRefused(Exception):
 
 
 def _url(raw: str) -> str:
+    """psycopg form of the admin URL; TLS is required off the private network."""
     for prefix in ("postgresql+psycopg://", "postgres://"):
         if raw.startswith(prefix):
-            return "postgresql://" + raw[len(prefix) :]
+            raw = "postgresql://" + raw[len(prefix) :]
+    host = urlsplit(raw).hostname or ""
+    local = host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".railway.internal")
+    if not local and "sslmode=" not in raw:
+        raw += ("&" if "?" in raw else "?") + "sslmode=require"
     return raw
 
 
@@ -68,8 +75,7 @@ def read_file(path: str | None, url: str | None, sha256: str | None) -> bytes:
             raise ImportRefused("WASSUP_PATIENTS_URL must be https")
         if not sha256:
             raise ImportRefused("WASSUP_PATIENTS_SHA256 is required with a URL")
-        with urlopen(url, timeout=60) as response:  # noqa: S310 - https enforced above
-            data = response.read(64 * 1024 * 1024)
+        data = fetch(url)
     else:
         raise ImportRefused("WASSUP_PATIENTS_PATH or WASSUP_PATIENTS_URL is required")
     if sha256 and hashlib.sha256(data).hexdigest().lower() != sha256.lower():
@@ -77,30 +83,54 @@ def read_file(path: str | None, url: str | None, sha256: str | None) -> bytes:
     return data
 
 
-def _dob(value: str) -> date | None:
+def fetch(url: str, transport: httpx.BaseTransport | None = None) -> bytes:
+    """Download over https only: no redirects (a hop to http would send the file in clear),
+    a size cap, and a timeout. The caller still checks the SHA-256."""
+    with (
+        httpx.Client(follow_redirects=False, timeout=60.0, transport=transport) as client,
+        client.stream("GET", url) as response,
+    ):
+        if response.is_redirect:
+            raise ImportRefused("WASSUP_PATIENTS_URL redirects; use the final https link")
+        if response.status_code != 200:
+            raise ImportRefused(f"WASSUP_PATIENTS_URL answered {response.status_code}")
+        chunks: list[bytes] = []
+        size = 0
+        for chunk in response.iter_bytes():
+            size += len(chunk)
+            if size > MAX_FILE_BYTES:
+                raise ImportRefused("the file is larger than 64 MiB; split it")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _dob(value: str, evidence: set[str] | None = None) -> date | None:
+    """Dates are ISO or day-first. A slash date reveals its order only when one part exceeds
+    12: those findings are collected in ``evidence`` so a month-first export can be refused as a
+    whole instead of silently swapping days and months for everyone born on or before the 12th."""
     value = value.strip()
     if not value:
         return None
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
         try:
-            return datetime.strptime(value, fmt).date()
+            parsed = datetime.strptime(value, fmt).date()
         except ValueError:
             continue
+        if fmt != "%Y-%m-%d" and evidence is not None:
+            first, second = int(value[:2]), int(value[3:5])
+            if first > 12:
+                evidence.add("day_first")
+            if second > 12:
+                evidence.add("month_first")
+        return parsed
+    if evidence is not None:
+        for fmt in ("%m/%d/%Y", "%m-%d-%Y"):  # valid only month-first, e.g. 05/31/1999
+            try:
+                datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+            evidence.add("month_first")
     raise ValueError("date_of_birth")
-
-
-def normalise_phone(value: str) -> str | None:
-    """Australian numbers to E.164; anything else kept as digits with a leading +."""
-    digits = re.sub(r"\D", "", value or "")
-    if not digits:
-        return None
-    if digits.startswith("61") and len(digits) == 11:
-        return "+" + digits
-    if digits.startswith("0") and len(digits) == 10:
-        return "+61" + digits[1:]
-    if len(digits) == 9 and digits[0] in "2345678":
-        return "+61" + digits
-    return "+" + digits if 7 <= len(digits) <= 15 else None
 
 
 def parse_rows(data: bytes) -> tuple[list[dict[str, Any]], list[str]]:
@@ -114,6 +144,7 @@ def parse_rows(data: bytes) -> tuple[list[dict[str, Any]], list[str]]:
     rows: list[dict[str, Any]] = []
     refused: list[str] = []
     seen: set[str] = set()
+    evidence: set[str] = set()
     for raw in reader:
         item = {k.strip().lower(): (v or "").strip() for k, v in raw.items() if k}
         pms = item.get("source_pms_id", "")
@@ -122,7 +153,7 @@ def parse_rows(data: bytes) -> tuple[list[dict[str, Any]], list[str]]:
             continue
         seen.add(pms)
         try:
-            dob = _dob(item.get("date_of_birth", ""))
+            dob = _dob(item.get("date_of_birth", ""), evidence)
         except ValueError:
             refused.append(pms)
             continue
@@ -140,12 +171,17 @@ def parse_rows(data: bytes) -> tuple[list[dict[str, Any]], list[str]]:
                 "first_name": first,
                 "last_name": last,
                 "date_of_birth": dob,
-                "phone": normalise_phone(item.get("phone", "")),
+                "phone": canonical_phone(item.get("phone", "")),
                 "is_deceased": deceased_raw in TRUE,
             }
         )
         if len(rows) > MAX_ROWS:
             raise ImportRefused(f"more than {MAX_ROWS} rows; split the file")
+    if "month_first" in evidence:
+        raise ImportRefused(
+            "date_of_birth looks month-first (MM/DD/YYYY) in at least one row; export dates as "
+            "YYYY-MM-DD and try again"
+        )
     return rows, refused
 
 
@@ -219,7 +255,7 @@ def run(admin_url: str, slug: str, data: bytes, *, apply: bool) -> dict[str, int
                 total = int(
                     conn.execute(
                         "SELECT count(*) FROM patients WHERE clinic_id = %s", (clinic_id,)
-                    ).fetchone()["count"]
+                    ).fetchone()["count"]  # type: ignore[index]
                 )
                 counts.update(
                     inserted=inserted, refreshed=refreshed, unchanged=unchanged, total_after=total
@@ -270,8 +306,11 @@ def main() -> int:
             env.get("WASSUP_PATIENTS_SHA256"),
         )
         counts = run(admin_url, slug, data, apply=apply)
-    except (ImportRefused, UnicodeDecodeError, OSError) as exc:
+    except (ImportRefused, UnicodeDecodeError, OSError, httpx.HTTPError) as exc:
         print(f"import refused: {exc}", file=sys.stderr)
+        return 1
+    except psycopg.Error as exc:  # never echo a database message: it can quote a row
+        print(f"import refused: database error {type(exc).__name__}", file=sys.stderr)
         return 1
     print(" ".join(f"{k}={v}" for k, v in counts.items()))
     print(

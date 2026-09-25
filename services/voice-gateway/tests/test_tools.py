@@ -281,6 +281,81 @@ async def test_lookup_is_verified_only_from_the_number_on_file(
     assert withheld.json() == {"matched": False, "reason": "caller_id_withheld"}
 
 
+async def test_withheld_caller_id_markers_and_foreign_numbers_never_verify(
+    voice_engine: AsyncEngine, db_engine: Engine, patients: dict[str, uuid.UUID]
+) -> None:
+    """The provider's blocked-ID sentinel (+266696687, nine digits) must count as withheld, and
+    a foreign number sharing its last nine digits with the patient's must not verify."""
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(
+            text("UPDATE patients SET phone = '02 6669 6687' WHERE id = :id"),  # +61266696687
+            {"id": patients["alive"]},
+        )
+    args = {"first_name": "Test", "last_name": "Patient", "date_of_birth": "1980-01-15"}
+    async with _client(voice_engine) as client:
+        answers = {
+            label: (
+                await _tool(
+                    client,
+                    "lookup_patient",
+                    args,
+                    call_id=f"call_{uuid.uuid4().hex}",
+                    from_number=number,
+                )
+            ).json()
+            for label, number in {
+                "twilio_anonymous": "+266696687",
+                "word": "anonymous",
+                "restricted": "Restricted",
+                "uk_same_tail": "+44266696687",
+                "own_line_intl": "+61 2 6669 6687",
+                "own_line_local": "0266696687",
+            }.items()
+        }
+    for label in ("twilio_anonymous", "word", "restricted"):
+        assert answers[label] == {"matched": False, "reason": "caller_id_withheld"}, label
+    assert answers["uk_same_tail"]["matched"] and answers["uk_same_tail"]["verified"] is False
+    assert answers["own_line_intl"]["verified"] is True
+    assert answers["own_line_local"]["verified"] is True
+
+
+@pytest.fixture
+async def wide_engine(db_url: str) -> AsyncIterator[AsyncEngine]:
+    engine = make_engine(db_url, pool_size=12)
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _as_app_voice(dbapi_conn, _record):  # type: ignore[no-untyped-def]
+        cursor = dbapi_conn.cursor()
+        cursor.execute("SET ROLE app_voice")
+        cursor.close()
+
+    yield engine
+    await engine.dispose()
+
+
+async def test_per_caller_cap_holds_under_concurrent_calls(
+    wide_engine: AsyncEngine, patients: dict[str, uuid.UUID]
+) -> None:
+    """Twelve simultaneous lookups from one number: exactly five get through (the count and
+    the claim are serialised per caller, not just per call)."""
+    args = {"first_name": "Nobody", "last_name": "Here", "date_of_birth": "1999-09-09"}
+    async with _client(wide_engine) as client:
+        answers = await asyncio.gather(
+            *[
+                _tool(
+                    client,
+                    "lookup_patient",
+                    args,
+                    call_id=f"call_{uuid.uuid4().hex}",
+                    from_number="+61400000321",
+                )
+                for _ in range(12)
+            ]
+        )
+    reasons = [a.json().get("reason") for a in answers]
+    assert reasons.count(None) == 5 and reasons.count("limit_reached") == 7
+
+
 async def test_lookups_are_capped_per_caller_number_across_calls(
     voice_engine: AsyncEngine, patients: dict[str, uuid.UUID]
 ) -> None:

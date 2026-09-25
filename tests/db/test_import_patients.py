@@ -11,6 +11,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -124,6 +125,40 @@ def test_refuses_bad_files_and_mismatched_checksums(tmp_path: Path) -> None:
         tool.read_file(None, "http://example.test/p.csv", "00" * 32)
     with pytest.raises(tool.ImportRefused, match="SHA256"):
         tool.read_file(None, "https://example.test/p.csv", None)
+
+
+def test_month_first_dates_refuse_the_whole_file() -> None:
+    month_first = CSV.replace(b"1970-01-02", b"05/31/1970")
+    with pytest.raises(tool.ImportRefused, match="month-first"):
+        tool.parse_rows(month_first)
+    # An ambiguous slash date alone is read day-first, as documented.
+    rows, _ = tool.parse_rows(CSV)
+    assert next(r for r in rows if r["source_pms_id"] == "P2")["date_of_birth"] == date(1985, 4, 3)
+
+
+def test_url_fetch_refuses_redirects_and_oversized_files() -> None:
+    def redirect(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "http://example.test/p.csv"})
+
+    with pytest.raises(tool.ImportRefused, match="redirects"):
+        tool.fetch("https://example.test/p.csv", httpx.MockTransport(redirect))
+
+    def huge(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * (tool.MAX_FILE_BYTES + 1))
+
+    with pytest.raises(tool.ImportRefused, match="larger"):
+        tool.fetch("https://example.test/p.csv", httpx.MockTransport(huge))
+
+    def ok(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=CSV)
+
+    assert tool.fetch("https://example.test/p.csv", httpx.MockTransport(ok)) == CSV
+
+
+def test_admin_url_requires_tls_off_the_private_network() -> None:
+    assert "sslmode=require" in tool._url("postgresql://u:p@db.example.test:5432/x")
+    assert "sslmode" not in tool._url("postgresql://u@localhost:5432/x")
+    assert "sslmode" not in tool._url("postgresql://u@postgres.railway.internal:5432/x")
 
 
 def test_production_apply_needs_the_clinic_acknowledgement(

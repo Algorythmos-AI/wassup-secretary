@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import time
 import uuid
@@ -35,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from wassup_core.db import clinic_scope, unscoped
 from wassup_core.http import problem
 from wassup_core.logging import get_logger
+from wassup_core.phone import canonical_phone
 
 from voice_gateway import store
 from voice_gateway.settings import VoiceGatewaySettings
@@ -54,18 +56,19 @@ class ToolContext:
     clinic_id: uuid.UUID
     call_id: str
     dedupe_key: str
+    # The caller's number in canonical form (None = withheld or unusable) and its keyed hash.
     from_number: str | None = None
+    caller_key: str | None = None
 
 
-def _digits(value: str | None) -> str:
-    return "".join(ch for ch in (value or "") if ch.isdigit())
-
-
-def same_number(a: str | None, b: str | None) -> bool:
-    """Do two phone numbers name the same line? Compared on their last nine digits, which is
-    what an Australian number keeps whether written +61 4xx xxx xxx or 04xx xxx xxx."""
-    da, db = _digits(a), _digits(b)
-    return len(da) >= 9 and len(db) >= 9 and da[-9:] == db[-9:]
+def caller_key(secret: str, number: str | None) -> str | None:
+    """A keyed hash of the caller's canonical number: enough to count lookups per caller, and
+    nothing a reader of the table could turn back into a number. None when there is no usable
+    caller ID (withheld, a provider's "anonymous" marker, or a shape we can't place)."""
+    canonical = canonical_phone(number)
+    if canonical is None:
+        return None
+    return hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
 
 
 class CaptureMessageArgs(BaseModel):
@@ -134,21 +137,26 @@ async def lookup_patient(ctx: ToolContext, args: LookupPatientArgs) -> dict[str,
     MAX_LOOKUPS_PER_CALLER_PER_DAY per caller number; refused when the caller ID is withheld.
     ``verified`` is true only when the caller is ringing from the number on the patient's
     record: the agent may say patient-specific things only then."""
-    if not ctx.from_number:
+    if not ctx.from_number or not ctx.caller_key:
         return {"matched": False, "reason": "caller_id_withheld"}
+    # Count-then-claim is a race between concurrent calls from one number: serialise per caller
+    # (transaction-scoped lock; the claim row is written in this same transaction).
+    await ctx.conn.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext('lookup:' || :k))"), {"k": ctx.caller_key}
+    )
     prior = await ctx.conn.execute(
         text(
             "SELECT count(*) FILTER (WHERE provider_call_id = :call_id) AS this_call, "
             "count(*) AS this_caller FROM tool_invocations "
             "WHERE clinic_id = :clinic_id AND tool = 'lookup_patient' AND dedupe_key <> :dedupe "
             "AND (provider_call_id = :call_id "
-            "     OR (caller_number = :caller AND created_at > now() - interval '24 hours'))"
+            "     OR (caller_key = :caller AND created_at > now() - interval '24 hours'))"
         ),
         {
             "call_id": ctx.call_id,
             "dedupe": ctx.dedupe_key,
             "clinic_id": ctx.clinic_id,
-            "caller": ctx.from_number,
+            "caller": ctx.caller_key,
         },
     )
     counts = prior.mappings().one()
@@ -180,7 +188,7 @@ async def lookup_patient(ctx: ToolContext, args: LookupPatientArgs) -> dict[str,
     return {
         "matched": True,
         "patient_ref": str(rows[0].id),
-        "verified": same_number(ctx.from_number, rows[0].phone),
+        "verified": ctx.from_number == canonical_phone(rows[0].phone),
     }
 
 
@@ -223,12 +231,14 @@ async def _invoke(
     parsed_args: BaseModel,
     payload: dict[str, Any],
     ai_lines: frozenset[str],
+    hash_secret: str,
 ) -> dict[str, Any]:
     call_id = str(call["call_id"])
     agent_id = call.get("agent_id") if isinstance(call.get("agent_id"), str) else None
     to_number = call.get("to_number") if isinstance(call.get("to_number"), str) else None
-    from_number = call.get("from_number") if isinstance(call.get("from_number"), str) else None
-    from_number = from_number[:32] if from_number else None
+    raw_from = call.get("from_number") if isinstance(call.get("from_number"), str) else None
+    from_number = canonical_phone(raw_from[:32] if raw_from else None)
+    caller = caller_key(hash_secret, from_number) if tool == "lookup_patient" else None
     key = dedupe_key(call_id, tool, raw_args)
 
     # 1. Synthetic line checks touch nothing. Otherwise commit the raw request before anything
@@ -278,7 +288,7 @@ async def _invoke(
             text(
                 """
                 INSERT INTO tool_invocations
-                  (clinic_id, provider_call_id, tool, dedupe_key, args_hash, caller_number)
+                  (clinic_id, provider_call_id, tool, dedupe_key, args_hash, caller_key)
                 VALUES (:clinic_id, :call_id, :tool, :key, :key, :caller)
                 ON CONFLICT (dedupe_key) DO NOTHING
                 RETURNING id
@@ -289,7 +299,7 @@ async def _invoke(
                 "call_id": call_id,
                 "tool": tool,
                 "key": key,
-                "caller": from_number,
+                "caller": caller,
             },
         )
         invocation_id = claimed.scalar()
@@ -303,7 +313,7 @@ async def _invoke(
             log.info("tool_replayed", tool=tool, call_id=call_id)
             return dict(result) if isinstance(result, dict) else spec.fallback
         result = await spec.handler(
-            ToolContext(conn, clinic_id, call_id, key, from_number), parsed_args
+            ToolContext(conn, clinic_id, call_id, key, from_number, caller), parsed_args
         )
         await conn.execute(
             text(
@@ -361,6 +371,7 @@ async def retell_tool(request: Request, clinic_slug: str, tool: str) -> JSONResp
                 parsed_args=parsed_args,
                 payload=payload,
                 ai_lines=settings.ai_lines,
+                hash_secret=settings.caller_hash_secret,
             )
     except TimeoutError:
         log.error("tool_degraded", tool=tool, call_id=call["call_id"], reason="timeout")

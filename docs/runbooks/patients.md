@@ -9,10 +9,18 @@ confirm against the clinic's own list in `patients`, loaded with `db/import_pati
 - `{"matched": false}` for no match, more than one match, a deceased patient, a caller who has
   used up their lookups, or a withheld caller ID. These are indistinguishable on purpose.
 - `{"matched": true, "patient_ref": …, "verified": true|false}` for exactly one living match.
-  `verified` is true only when the caller is ringing from the number on the patient's record.
-  **The agent may say patient-specific things only when `verified` is true**; otherwise it
-  treats the caller as unverified and takes a message.
-- Limits: 2 lookups per call, 5 per caller number per 24 hours, none with caller ID withheld.
+  `verified` is true only when the caller's number and the number on the patient's record are
+  the same number once both are written the one canonical way (`+61…`; a foreign number never
+  equals an Australian one, whatever its last digits). **The agent may say patient-specific
+  things only when `verified` is true**; otherwise it treats the caller as unverified and takes
+  a message.
+- **What `verified` is not:** proof of identity. Caller ID can be spoofed over VoIP and is not
+  authenticated in Australia. It is enough for non-clinical, patient-specific handling (which
+  clinic, which doctor, an existing message); anything clinical still goes to a person who
+  confirms identity themselves.
+- Limits: 2 lookups per call, 5 per caller number per 24 hours, none with caller ID withheld
+  (empty, a provider marker such as "anonymous", or Twilio's blocked-ID number `+266696687`).
+  The per-caller count is kept as a keyed hash of the number, never the number itself.
 
 ## Loading the list
 

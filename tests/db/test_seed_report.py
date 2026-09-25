@@ -54,6 +54,10 @@ def test_seed_refuses_production_and_bad_roles(monkeypatch: pytest.MonkeyPatch) 
     assert seed_synthetic.main() == 2
     monkeypatch.delenv("WASSUP_ENVIRONMENT")
     assert seed_synthetic.main() == 2  # unset means production: fails closed
+    monkeypatch.setenv(
+        "WASSUP_ENVIRONMENT", "prod"
+    )  # so does anything that is not a known non-production name
+    assert seed_synthetic.main() == 2
     with pytest.raises(SystemExit, match="unknown role"):
         seed_synthetic.parse_staff("uid:e@example.test:superuser")
 

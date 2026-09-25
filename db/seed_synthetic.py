@@ -80,7 +80,7 @@ def parse_staff(raw: str) -> list[tuple[str, str, str]]:
 
 
 def main() -> int:
-    if os.environ.get("WASSUP_ENVIRONMENT", "production") == "production":
+    if os.environ.get("WASSUP_ENVIRONMENT", "") not in ("local", "test", "staging"):  # fails closed
         print("refusing to seed synthetic data into production", file=sys.stderr)
         return 2
     seed(

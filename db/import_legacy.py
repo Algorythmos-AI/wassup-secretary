@@ -17,6 +17,9 @@ data goes database to database and never through anyone's laptop.
                                   belongs to this clinic
     WASSUP_IMPORT_APPLY           "true" to commit; anything else is a dry run that does all the
                                   work, verifies it, then rolls back
+    WASSUP_PRODUCTION_ACK         in production (WASSUP_ENVIRONMENT=production, or unset), an
+                                  apply also needs this set to the clinic slug being imported: a
+                                  deliberate, per-clinic acknowledgement, never a leftover flag
 
 Guarantees:
 - **Idempotent.** Calls are keyed on (clinic, provider call id); messages, promises and history
@@ -520,6 +523,16 @@ def main() -> int:
         print(f"not set: {', '.join(missing)}", file=sys.stderr)
         return 2
     apply = env.get("WASSUP_IMPORT_APPLY") == "true"
+    slug = env["WASSUP_IMPORT_CLINIC"]
+    # Fails closed: anything but a known non-production environment counts as production.
+    production = env.get("WASSUP_ENVIRONMENT", "") not in ("local", "test", "staging")
+    if apply and production and env.get("WASSUP_PRODUCTION_ACK") != slug:
+        print(
+            "import refused: applying to production needs WASSUP_PRODUCTION_ACK set to the "
+            f"clinic slug ({slug!r}); run without WASSUP_IMPORT_APPLY for a dry run",
+            file=sys.stderr,
+        )
+        return 2
     try:
         report = run(
             env["WASSUP_LEGACY_DATABASE_URL"],

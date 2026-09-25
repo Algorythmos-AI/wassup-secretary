@@ -109,7 +109,9 @@ one-shot `db-admin` service; everyone else is invited from the dashboard's Team 
      the clinic's calls route here once its agent posts to this platform) and
      `WASSUP_CLINIC_ALERT_EMAILS` (urgent-message recipients)
 3. Deploy `db-admin`: a dry run. Wait for the log to end `dry run: checked, then rolled back`;
-   it prints the new clinic id and what would be added (never the owner's email).
+   it prints the new clinic id and what would be added (never the owner's email). Read **this
+   deployment's** log (`railway deployment list -s db-admin`, then `railway logs <deployment id>`):
+   straight after a deploy, `railway logs -s db-admin` can still show the previous run.
 4. Apply: `WASSUP_CLINIC_APPLY=true` (and in production `WASSUP_PRODUCTION_ACK=<slug>`), deploy
    again; the log ends `committed`. The owner signs in again and lands in the clinic.
 5. Clean up: remove the `WASSUP_CLINIC_*` variables and the acknowledgement; `WASSUP_ROLE=report`.

@@ -44,6 +44,8 @@ router = APIRouter()
 log = get_logger(__name__)
 
 MAX_LOOKUPS_PER_CALL = 2
+# Across calls: one caller number may not probe the patient list more than this in a day.
+MAX_LOOKUPS_PER_CALLER_PER_DAY = 5
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,18 @@ class ToolContext:
     clinic_id: uuid.UUID
     call_id: str
     dedupe_key: str
+    from_number: str | None = None
+
+
+def _digits(value: str | None) -> str:
+    return "".join(ch for ch in (value or "") if ch.isdigit())
+
+
+def same_number(a: str | None, b: str | None) -> bool:
+    """Do two phone numbers name the same line? Compared on their last nine digits, which is
+    what an Australian number keeps whether written +61 4xx xxx xxx or 04xx xxx xxx."""
+    da, db = _digits(a), _digits(b)
+    return len(da) >= 9 and len(db) >= 9 and da[-9:] == db[-9:]
 
 
 class CaptureMessageArgs(BaseModel):
@@ -116,21 +130,38 @@ async def create_promise(ctx: ToolContext, args: CreatePromiseArgs) -> dict[str,
 
 async def lookup_patient(ctx: ToolContext, args: LookupPatientArgs) -> dict[str, Any]:
     """Privacy-first lookup: exact match only; never returns names; a deceased patient is
-    indistinguishable from no match; at most MAX_LOOKUPS_PER_CALL per call."""
+    indistinguishable from no match; at most MAX_LOOKUPS_PER_CALL per call and
+    MAX_LOOKUPS_PER_CALLER_PER_DAY per caller number; refused when the caller ID is withheld.
+    ``verified`` is true only when the caller is ringing from the number on the patient's
+    record: the agent may say patient-specific things only then."""
+    if not ctx.from_number:
+        return {"matched": False, "reason": "caller_id_withheld"}
     prior = await ctx.conn.execute(
         text(
-            "SELECT count(*) FROM tool_invocations "
-            "WHERE provider_call_id = :call_id AND tool = 'lookup_patient' AND dedupe_key <> :dedupe"
+            "SELECT count(*) FILTER (WHERE provider_call_id = :call_id) AS this_call, "
+            "count(*) AS this_caller FROM tool_invocations "
+            "WHERE clinic_id = :clinic_id AND tool = 'lookup_patient' AND dedupe_key <> :dedupe "
+            "AND (provider_call_id = :call_id "
+            "     OR (caller_number = :caller AND created_at > now() - interval '24 hours'))"
         ),
-        {"call_id": ctx.call_id, "dedupe": ctx.dedupe_key},
+        {
+            "call_id": ctx.call_id,
+            "dedupe": ctx.dedupe_key,
+            "clinic_id": ctx.clinic_id,
+            "caller": ctx.from_number,
+        },
     )
-    if int(prior.scalar_one()) >= MAX_LOOKUPS_PER_CALL:
+    counts = prior.mappings().one()
+    if int(counts["this_call"]) >= MAX_LOOKUPS_PER_CALL:
+        return {"matched": False, "reason": "limit_reached"}
+    if int(counts["this_caller"]) >= MAX_LOOKUPS_PER_CALLER_PER_DAY:
+        log.warning("lookup_caller_limit", call_id=ctx.call_id, clinic_id=str(ctx.clinic_id))
         return {"matched": False, "reason": "limit_reached"}
     rows = (
         await ctx.conn.execute(
             text(
                 """
-                SELECT id, is_deceased FROM patients
+                SELECT id, is_deceased, phone FROM patients
                 WHERE clinic_id = :clinic_id AND date_of_birth = :dob
                   AND lower(last_name) = lower(:last) AND lower(first_name) = lower(:first)
                 LIMIT 2
@@ -146,7 +177,11 @@ async def lookup_patient(ctx: ToolContext, args: LookupPatientArgs) -> dict[str,
     ).all()
     if len(rows) != 1 or rows[0].is_deceased:
         return {"matched": False}
-    return {"matched": True, "patient_ref": str(rows[0].id)}
+    return {
+        "matched": True,
+        "patient_ref": str(rows[0].id),
+        "verified": same_number(ctx.from_number, rows[0].phone),
+    }
 
 
 @dataclass(frozen=True)
@@ -192,6 +227,8 @@ async def _invoke(
     call_id = str(call["call_id"])
     agent_id = call.get("agent_id") if isinstance(call.get("agent_id"), str) else None
     to_number = call.get("to_number") if isinstance(call.get("to_number"), str) else None
+    from_number = call.get("from_number") if isinstance(call.get("from_number"), str) else None
+    from_number = from_number[:32] if from_number else None
     key = dedupe_key(call_id, tool, raw_args)
 
     # 1. Synthetic line checks touch nothing. Otherwise commit the raw request before anything
@@ -240,13 +277,20 @@ async def _invoke(
         claimed = await conn.execute(
             text(
                 """
-                INSERT INTO tool_invocations (clinic_id, provider_call_id, tool, dedupe_key, args_hash)
-                VALUES (:clinic_id, :call_id, :tool, :key, :key)
+                INSERT INTO tool_invocations
+                  (clinic_id, provider_call_id, tool, dedupe_key, args_hash, caller_number)
+                VALUES (:clinic_id, :call_id, :tool, :key, :key, :caller)
                 ON CONFLICT (dedupe_key) DO NOTHING
                 RETURNING id
                 """
             ),
-            {"clinic_id": clinic_id, "call_id": call_id, "tool": tool, "key": key},
+            {
+                "clinic_id": clinic_id,
+                "call_id": call_id,
+                "tool": tool,
+                "key": key,
+                "caller": from_number,
+            },
         )
         invocation_id = claimed.scalar()
         if invocation_id is None:  # a retry: return what the first attempt answered
@@ -258,7 +302,9 @@ async def _invoke(
                 await store.complete_tool_request(conn, key, "duplicate", clinic_id)
             log.info("tool_replayed", tool=tool, call_id=call_id)
             return dict(result) if isinstance(result, dict) else spec.fallback
-        result = await spec.handler(ToolContext(conn, clinic_id, call_id, key), parsed_args)
+        result = await spec.handler(
+            ToolContext(conn, clinic_id, call_id, key, from_number), parsed_args
+        )
         await conn.execute(
             text(
                 "UPDATE tool_invocations SET result = CAST(:result AS jsonb), latency_ms = :ms WHERE id = :id"

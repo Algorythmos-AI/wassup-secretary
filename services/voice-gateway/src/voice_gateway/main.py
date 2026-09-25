@@ -19,9 +19,9 @@ from voice_gateway.webhook import router as webhook_router
 # max 154 KB (Sept 2026). Limits leave >30x headroom so a long call is never dropped.
 WEBHOOK_BODY_LIMIT = 5 * 1024 * 1024
 TOOL_BODY_LIMIT = 2 * 1024 * 1024
-# The newest schema object this service's code relies on (migration 0010). Bump it together with
+# The newest schema object this service's code relies on (migration 0012). Bump it together with
 # the migration that adds something voice-gateway needs: /health stays 503 until it exists.
-SCHEMA_PROBE = "SELECT has_column_privilege('calls', 'priority_level', 'INSERT')"
+SCHEMA_PROBE = "SELECT has_column_privilege('tool_invocations', 'caller_number', 'INSERT')"
 
 
 def build_app(

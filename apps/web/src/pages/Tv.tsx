@@ -1,5 +1,5 @@
 /** Office TV: today at wall scale. Masked numbers and no summaries (patients may see it). */
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useParams } from "react-router";
 import type { AnalyticsSummary, CallSummary } from "../api/types";
 import { useAuth } from "../auth/auth";
@@ -7,7 +7,9 @@ import { useSession } from "../auth/session";
 import { config } from "../config";
 import { buildDaySheet } from "../lib/daysheet";
 import { OPEN_STATUSES, STATUS_LABEL, humanizeIntent, maskPhone } from "../lib/format";
+import { coalesce } from "../lib/coalesce";
 import { followEvents } from "../lib/sse";
+import { useReloadOnNewVersion } from "../lib/version";
 import { waited, waitingOrder } from "../lib/waiting";
 import { formatClock, formatHour, formatLongDate, formatTime, todayIn } from "../lib/time";
 import "../styles/tv.css";
@@ -26,33 +28,47 @@ export function Tv() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [live, setLive] = useState<"live" | "reconnecting">("reconnecting");
+  const [revoked, setRevoked] = useState(false);
   const [urgentAt, setUrgentAt] = useState<number | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const generation = useRef(0);
+  useReloadOnNewVersion();
 
   const timeZone = current?.timezone ?? "Australia/Sydney";
   const today = todayIn(timeZone, now);
 
-  const refresh = useCallback(async () => {
-    if (!current) return;
-    const day = todayIn(current.timezone);
-    // Open calls are fetched separately: an old call still waiting must not fall off the board
-    // just because newer calls pushed it off the first page.
-    const [page, waiting, stats] = await Promise.all([
-      api.calls(current.id, { limit: 100 }),
-      api.calls(current.id, { limit: 100, openOnly: true }),
-      api.analytics(current.id, { from: day, to: day }),
-    ]);
-    setCalls(page.items);
-    setOpen(waiting.items);
-    setMoreOpen(waiting.next_cursor !== null);
-    setSummary(stats);
-    setUpdatedAt(new Date());
-  }, [api, current]);
+  // One refresh at a time; a burst of events collapses into one more.
+  const refresh = useMemo(
+    () =>
+      coalesce(async () => {
+        if (!current) return;
+        const gen = generation.current;
+        const day = todayIn(current.timezone);
+        // The waiting board needs both ends of the open list: the longest waits (oldest first)
+        // and anything that just came in (newest first), merged and ranked on the client.
+        const [page, newestOpen, oldestOpen, stats] = await Promise.all([
+          api.calls(current.id, { limit: 100 }),
+          api.calls(current.id, { limit: 100, openOnly: true }),
+          api.calls(current.id, { limit: 100, openOnly: true, order: "oldest" }),
+          api.analytics(current.id, { from: day, to: day }),
+        ]);
+        if (gen !== generation.current) return;
+        const merged = new Map([...oldestOpen.items, ...newestOpen.items].map((c) => [c.id, c]));
+        setCalls(page.items);
+        setOpen([...merged.values()]);
+        setMoreOpen(newestOpen.next_cursor !== null && oldestOpen.next_cursor !== null && merged.size >= 200);
+        setSummary(stats);
+        setUpdatedAt(new Date());
+      }),
+    [api, current],
+  );
 
   useEffect(() => {
+    generation.current += 1;
+    setRevoked(false);
     const clock = window.setInterval(() => setNow(new Date()), 15_000);
-    const fallback = window.setInterval(() => void refresh().catch(() => undefined), FALLBACK_REFRESH_MS);
-    void refresh().catch(() => undefined);
+    const fallback = window.setInterval(() => void refresh(), FALLBACK_REFRESH_MS);
+    void refresh();
     return () => {
       window.clearInterval(clock);
       window.clearInterval(fallback);
@@ -63,21 +79,37 @@ export function Tv() {
     if (!current) return;
     const controller = new AbortController();
     void followEvents({
-      url: `${config.apiBase}/v1/clinics/${current.id}/events`,
+      url: `${config.apiBase}/v1/clinics/${encodeURIComponent(current.id)}/events`,
       token,
       signal: controller.signal,
       onStatus: setLive,
+      onReady: () => void refresh(),
+      onReset: () => void refresh(),
       onEvent: (event) => {
         if (event.event === "message.urgent") setUrgentAt(Date.now());
-        void refresh().catch(() => undefined);
+        void refresh();
       },
-      onReset: () => void refresh().catch(() => undefined),
+      onRevoked: () => {
+        // Access removed: clear the board rather than leave patients' calls on a wall screen.
+        generation.current += 1;
+        setRevoked(true);
+        setCalls([]);
+        setOpen([]);
+        setSummary(null);
+      },
     });
     return () => controller.abort();
   }, [current, token, refresh]);
 
   if (me && !current) return <Navigate to="/" replace />;
   if (!current) return null;
+  if (revoked) {
+    return (
+      <div className="tv tv--message">
+        <p>This screen no longer has access to {current.name}. Sign in again to show the board.</p>
+      </div>
+    );
+  }
 
   const todays = calls.filter((c) => c.started_at && todayIn(timeZone, new Date(c.started_at)) === today);
   const waiting = open

@@ -28,21 +28,26 @@ def _engine(request: Request) -> AsyncEngine:
     return engine
 
 
-def _encode_cursor(started_at: datetime | None, call_id: uuid.UUID) -> str:
-    raw = json.dumps([started_at.isoformat() if started_at else None, str(call_id)])
-    return base64.urlsafe_b64encode(raw.encode()).decode()
+def _encode_cursor(started_at: datetime | None, call_id: uuid.UUID, order: str) -> str:
+    parts: list[str | None] = [started_at.isoformat() if started_at else None, str(call_id)]
+    if order != "newest":  # newest-first cursors keep their original two-part shape
+        parts.append(order)
+    return base64.urlsafe_b64encode(json.dumps(parts).encode()).decode()
 
 
-def _decode_cursor(cursor: str) -> tuple[datetime | None, uuid.UUID]:
+def _decode_cursor(cursor: str) -> tuple[datetime | None, uuid.UUID, str]:
     """Cursors come from clients, so every part is checked: anything unexpected is a 400."""
     invalid = HTTPException(status_code=400, detail="Invalid cursor")
     try:
         value = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
     except (ValueError, UnicodeError) as exc:
         raise invalid from exc
-    if not (isinstance(value, list) and len(value) == 2):
+    if not (isinstance(value, list) and len(value) in (2, 3)):
         raise invalid
-    started, call_id = value
+    started, call_id = value[0], value[1]
+    order = value[2] if len(value) == 3 else "newest"
+    if order not in ("newest", "oldest"):
+        raise invalid
     if not isinstance(call_id, str) or not (started is None or isinstance(started, str)):
         raise invalid
     try:
@@ -52,7 +57,7 @@ def _decode_cursor(cursor: str) -> tuple[datetime | None, uuid.UUID]:
         raise invalid from exc
     if started_at is not None and started_at.tzinfo is None:
         raise invalid
-    return started_at, parsed_id
+    return started_at, parsed_id, order
 
 
 async def _audit(
@@ -105,22 +110,31 @@ _LIST_SELECT = (
     "FROM calls WHERE clinic_id = :c "
 )
 _OPEN_ONLY = "AND workflow_status IN ('pending', 'following_up') "
-_LIST_ORDER = " ORDER BY started_at DESC NULLS LAST, id DESC LIMIT :limit"
-_AFTER_DATED_SQL = "AND ((started_at, id) < (:started, :last_id) OR started_at IS NULL)"
-_AFTER_UNDATED_SQL = "AND started_at IS NULL AND id < :last_id"
-# Keyset pagination on (started_at DESC NULLS LAST, id DESC) — stable under concurrent inserts.
-# Fixed statements (no SQL assembled per request). Rows without a start time sort last, and a
-# comparison with NULL is never true, so they are admitted explicitly once dated rows run out.
-# Keyed by (open_only, cursor kind).
+# Keyset pagination, stable under concurrent inserts. Newest first (the inbox) is
+# (started_at DESC NULLS LAST, id DESC); oldest first (who has waited longest) is the mirror.
+# Rows without a start time sort last either way; a comparison with NULL is never true, so they
+# are admitted explicitly once dated rows run out. Fixed statements, keyed by
+# (open_only, cursor kind, order): no SQL is assembled per request.
+_AFTER = {
+    ("dated", "newest"): "AND ((started_at, id) < (:started, :last_id) OR started_at IS NULL)",
+    ("undated", "newest"): "AND started_at IS NULL AND id < :last_id",
+    ("dated", "oldest"): "AND ((started_at, id) > (:started, :last_id) OR started_at IS NULL)",
+    ("undated", "oldest"): "AND started_at IS NULL AND id > :last_id",
+}
+_ORDER_BY = {
+    "newest": " ORDER BY started_at DESC NULLS LAST, id DESC LIMIT :limit",
+    "oldest": " ORDER BY started_at ASC NULLS LAST, id ASC LIMIT :limit",
+}
 _LIST = {
-    (open_only, kind): text(
+    (open_only, kind, order): text(
         _LIST_SELECT
         + (_OPEN_ONLY if open_only else "")
-        + {"first": "", "dated": _AFTER_DATED_SQL, "undated": _AFTER_UNDATED_SQL}[kind]
-        + _LIST_ORDER
+        + ("" if kind == "first" else _AFTER[(kind, order)])
+        + _ORDER_BY[order]
     )
     for open_only in (False, True)
     for kind in ("first", "dated", "undated")
+    for order in ("newest", "oldest")
 }
 
 
@@ -135,15 +149,21 @@ async def list_calls(
     open_only: Annotated[
         bool, Query(description="Only calls still to do (pending or following up)")
     ] = False,
+    order: Annotated[
+        Literal["newest", "oldest"],
+        Query(description="newest first (default), or oldest first: who has waited longest"),
+    ] = "newest",
 ) -> dict[str, Any]:
     staff.require(clinic_id)
     params: dict[str, Any] = {"c": clinic_id, "limit": limit + 1}
     kind = "first"
     if cursor:
-        started, last_id = _decode_cursor(cursor)
+        started, last_id, cursor_order = _decode_cursor(cursor)
+        if cursor_order != order:
+            raise HTTPException(status_code=400, detail="Cursor is for a different order")
         params.update({"started": started, "last_id": last_id})
         kind = "dated" if started else "undated"
-    statement = _LIST[(open_only, kind)]
+    statement = _LIST[(open_only, kind, order)]
     async with clinic_scope(_engine(request), [clinic_id]) as conn:
         rows = (await conn.execute(statement, params)).mappings().all()
         page = [dict(r) for r in rows[:limit]]
@@ -158,7 +178,7 @@ async def list_calls(
             detail={"call_ids": [str(r["id"]) for r in page]},
         )
     next_cursor = (
-        _encode_cursor(page[-1]["started_at"], page[-1]["id"]) if len(rows) > limit else None
+        _encode_cursor(page[-1]["started_at"], page[-1]["id"], order) if len(rows) > limit else None
     )
     return {"items": page, "next_cursor": next_cursor}
 
@@ -187,9 +207,12 @@ async def call_detail(
 ) -> dict[str, Any]:
     staff.require(clinic_id)
     async with clinic_scope(_engine(request), [clinic_id]) as conn:
-        call = (await conn.execute(_DETAIL, {"id": call_id, "c": clinic_id})).mappings().first()
-        if call is None:
+        row = (await conn.execute(_DETAIL, {"id": call_id, "c": clinic_id})).mappings().first()
+        if row is None:
             raise HTTPException(status_code=404, detail="Not found")
+        call = dict(row)
+        if not staff.has_role(clinic_id, "admin"):
+            call["cost_usd"] = None  # billing is for admins and owners (as /usage is)
         messages = (
             (await conn.execute(_MESSAGES, {"c": clinic_id, "p": call["provider_call_id"]}))
             .mappings()
@@ -332,7 +355,11 @@ async def update_workflow(
             {
                 "c": clinic_id,
                 "k": f"call.workflow:{call_id}:{version}",
-                "p": json.dumps({"call_id": str(call_id), "version": version}),
+                # The new status travels too (not personal data), so every screen can update that
+                # exact call, including one on a page it loaded long ago.
+                "p": json.dumps(
+                    {"call_id": str(call_id), "version": version, "workflow_status": action.status}
+                ),
             },
         )
     return {"call_id": str(call_id), "workflow_status": action.status, "version": version}

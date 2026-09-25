@@ -12,6 +12,8 @@ ARG VITE_FIREBASE_API_KEY
 ARG VITE_FIREBASE_AUTH_DOMAIN
 ARG VITE_FIREBASE_PROJECT_ID
 ARG VITE_FIREBASE_APP_ID
+# Build identity (set on every Railway deploy by scripts/deploy-railway.sh): /version.json.
+ARG GIT_TREE=unknown
 # Local test sign-in is for a developer's machine only: never build it into an image.
 RUN test -n "$VITE_API_BASE" || { echo "VITE_API_BASE is required" >&2; exit 1; }; \
     test "$VITE_AUTH_MODE" = "firebase" || { echo "images are always built with Firebase sign-in" >&2; exit 1; }; \

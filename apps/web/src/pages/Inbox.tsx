@@ -7,22 +7,14 @@ import { CallPanel } from "../components/CallPanel";
 import { DaySheet } from "../components/DaySheet";
 import { config } from "../config";
 import { OPEN_STATUSES } from "../lib/format";
+import { coalesce } from "../lib/coalesce";
+import { applyHead, applyMore, applyStatus } from "../lib/inbox";
 import { followEvents } from "../lib/sse";
 import "../styles/inbox.css";
 
 type View = "todo" | "all";
 
-/** Whether `call` falls inside the window covered by a freshly fetched first page. */
-function isRecent(call: CallSummary, page: CallSummary[]): boolean {
-  const oldest = page[page.length - 1]?.started_at;
-  return !!call.started_at && !!oldest && call.started_at >= oldest;
-}
-
-function merge(existing: CallSummary[], incoming: CallSummary[]): CallSummary[] {
-  const byId = new Map(existing.map((c) => [c.id, c]));
-  for (const c of incoming) byId.set(c.id, c);
-  return [...byId.values()].sort((a, b) => ((a.started_at ?? "") < (b.started_at ?? "") ? 1 : -1));
-}
+const LOAD_FAILED = "Couldn't load calls. Check the connection; this page tries again as soon as live updates reconnect.";
 
 export function Inbox() {
   const clinic = useOutletContext<ClinicAccess>();
@@ -32,83 +24,116 @@ export function Inbox() {
   const selectedId = params.get("call");
   const [calls, setCalls] = useState<CallSummary[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>("todo");
   const [live, setLive] = useState<"live" | "reconnecting">("reconnecting");
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [detailTick, setDetailTick] = useState(0);
+  const openOnly = view === "todo";
+  // Bumped whenever the clinic or view changes: any response for an earlier one is dropped.
+  const generation = useRef(0);
+  const initialised = useRef(false);
   const known = useRef<Set<string>>(new Set());
+  const detailDirty = useRef(false);
+  const selected = useRef(selectedId);
+  selected.current = selectedId;
 
-  const refreshHead = useCallback(
-    async (markNew: boolean) => {
-      const page = await api.calls(clinic.id, { limit: 50, openOnly: view === "todo" });
-      // In the to-do view, a call someone just finished drops out of the list.
-      setCalls((prev) =>
-        merge(
-          view === "todo" ? prev.filter((c) => page.items.some((i) => i.id === c.id) || !isRecent(c, page.items)) : prev,
-          page.items,
-        ),
-      );
-      if (markNew) {
-        const added = page.items.filter((c) => !known.current.has(c.id)).map((c) => c.id);
-        if (added.length) {
-          setFresh(new Set(added));
-          window.setTimeout(() => setFresh(new Set()), 4000);
+  // One refresh of the first page at a time; triggers during a run collapse into one more.
+  const refresh = useMemo(
+    () =>
+      coalesce(async () => {
+        const gen = generation.current;
+        try {
+          const page = await api.calls(clinic.id, { limit: 50, openOnly });
+          if (gen !== generation.current) return;
+          setCalls((prev) => applyHead(prev, page, openOnly));
+          if (!initialised.current) {
+            initialised.current = true;
+            setCursor(page.next_cursor);
+          } else {
+            const added = page.items.filter((c) => !known.current.has(c.id)).map((c) => c.id);
+            if (added.length) {
+              setFresh(new Set(added));
+              window.setTimeout(() => setFresh(new Set()), 4000);
+            }
+          }
+          page.items.forEach((c) => known.current.add(c.id));
+          setError(null);
+          setLoaded(true);
+          if (detailDirty.current) {
+            detailDirty.current = false;
+            setDetailTick((t) => t + 1);
+          }
+        } catch {
+          if (gen === generation.current && !initialised.current) setError(LOAD_FAILED);
         }
-      }
-      page.items.forEach((c) => known.current.add(c.id));
-      return page;
-    },
-    [api, clinic.id, view],
+      }),
+    [api, clinic.id, openOnly],
   );
 
   useEffect(() => {
-    let cancelled = false;
-    setCalls([]);
+    generation.current += 1;
+    initialised.current = false;
     known.current = new Set();
-    setLoading(true);
-    refreshHead(false)
-      .then((page) => {
-        if (!cancelled) {
-          setCursor(page.next_cursor);
-          setError(null);
-        }
-      })
-      .catch(() => !cancelled && setError("Couldn't load calls. Check the connection; this page retries when live updates reconnect."))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [refreshHead]);
+    setCalls([]);
+    setCursor(null);
+    setLoaded(false);
+    setError(null);
+    void refresh();
+  }, [refresh]);
 
   useEffect(() => {
     const controller = new AbortController();
     void followEvents({
-      url: `${config.apiBase}/v1/clinics/${clinic.id}/events`,
+      url: `${config.apiBase}/v1/clinics/${encodeURIComponent(clinic.id)}/events`,
       token,
       signal: controller.signal,
       onStatus: setLive,
-      onEvent: () => {
-        void refreshHead(true).catch(() => undefined);
-        setDetailTick((t) => t + 1);
+      // (Re)connected and positioned: reload, so nothing from before or between is missed.
+      onReady: () => void refresh(),
+      onReset: () => void refresh(),
+      onEvent: (event) => {
+        let data: { call_id?: string; version?: number; workflow_status?: WorkflowStatus } = {};
+        try {
+          data = JSON.parse(event.data) as typeof data;
+        } catch {
+          /* ids only; an unreadable payload still triggers a refresh */
+        }
+        if (event.event === "call.workflow" && data.call_id && typeof data.version === "number") {
+          const change = { call_id: data.call_id, version: data.version, workflow_status: data.workflow_status };
+          setCalls((prev) => applyStatus(prev, change));
+        }
+        // Message events name the provider's call id, which the list doesn't carry: rare, so
+        // any of them reloads an open call panel.
+        if (data.call_id === selected.current || event.event.startsWith("message.")) detailDirty.current = true;
+        void refresh();
       },
-      onReset: () => void refreshHead(false).catch(() => undefined),
-      onRevoked: () => setError("You no longer have access to this clinic."),
+      onRevoked: () => {
+        generation.current += 1;
+        setCalls([]);
+        setError("You no longer have access to this clinic.");
+      },
     });
     return () => controller.abort();
-  }, [clinic.id, token, refreshHead]);
+  }, [clinic.id, token, refresh]);
 
   async function loadMore() {
     if (!cursor) return;
-    const page = await api.calls(clinic.id, { limit: 50, cursor, openOnly: view === "todo" });
-    page.items.forEach((c) => known.current.add(c.id));
-    setCalls((prev) => merge(prev, page.items));
-    setCursor(page.next_cursor);
+    const gen = generation.current;
+    try {
+      const page = await api.calls(clinic.id, { limit: 50, cursor, openOnly });
+      if (gen !== generation.current) return;
+      page.items.forEach((c) => known.current.add(c.id));
+      setCalls((prev) => applyMore(prev, page));
+      setCursor(page.next_cursor);
+    } catch {
+      if (gen === generation.current) setError("Couldn't load earlier calls. Try again.");
+    }
   }
 
   const onChanged = useCallback((callId: string, status: WorkflowStatus, version: number) => {
-    setCalls((prev) => prev.map((c) => (c.id === callId ? { ...c, workflow_status: status, version } : c)));
+    setCalls((prev) => applyStatus(prev, { call_id: callId, version, workflow_status: status }));
   }, []);
 
   const shown = useMemo(
@@ -134,8 +159,8 @@ export function Inbox() {
           <span className={`live live--${live}`}>{live === "live" ? "Live" : "Reconnecting…"}</span>
         </header>
         {error && <p className="notice notice--error">{error}</p>}
-        {loading && <p className="inbox__empty">Loading calls…</p>}
-        {!loading && shown.length === 0 && !error && (
+        {!loaded && !error && <p className="inbox__empty">Loading calls…</p>}
+        {loaded && shown.length === 0 && !error && (
           <p className="inbox__empty">
             {view === "todo" ? "Nothing to follow up. New calls appear here as they finish." : "No calls yet."}
           </p>

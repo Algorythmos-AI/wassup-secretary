@@ -100,8 +100,10 @@ jobs:
       - name: Build the image and check it serves the app with its security headers
         working-directory: .
         run: |
+          tree="$(git rev-parse 'HEAD^{tree}')"
           docker build -f apps/web/Dockerfile \
             --build-arg VITE_API_BASE=https://api.example.test \
+            --build-arg GIT_TREE="$tree" \
             --build-arg VITE_FIREBASE_AUTH_DOMAIN=auth.example.test \
             -t wassup-web:ci .
           docker run -d --name web -p 8080:8080 \
@@ -114,7 +116,11 @@ jobs:
           grep -qi "frame-src https://auth.example.test" <<<"$headers"
           grep -qi '^x-frame-options: DENY' <<<"$headers"
           grep -qi '^strict-transport-security: ' <<<"$headers"
-          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/assets/missing.js)" = 404
+          missing="$(curl -sI localhost:8080/assets/missing.js)"
+          grep -q '^HTTP/1.1 404' <<<"$missing"
+          grep -qi '^cache-control: no-store' <<<"$missing"  # never cache a 404 for a year
+          grep -qi '^content-security-policy: ' <<<"$missing"  # headers survive error responses
+          test "$(curl -fsS localhost:8080/version.json)" = "{\"build\":\"$tree\"}"
           if docker run --rm --entrypoint sh wassup-web:ci -c 'grep -rlq sourceMappingURL /srv'; then
             echo "source maps must not ship" >&2; exit 1
           fi

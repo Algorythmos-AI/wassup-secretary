@@ -58,7 +58,7 @@ class CallRecord(CallSummary):
     to_number: str | None
     ended_at: datetime | None
     cost_usd: str | None = Field(
-        description="Voice-provider cost in US dollars, as a decimal string"
+        description="Voice-provider cost in US dollars, as a decimal string; admins and owners only"
     )
     disconnection_reason: str | None
     transcript: str | None = Field(description="Plain text. Never render it as HTML or Markdown.")
@@ -110,7 +110,7 @@ class Totals(BaseModel):
     calls: int
     avg_duration_seconds: int | None
     total_duration_seconds: int
-    cost_usd: str
+    cost_usd: str | None = Field(description="Voice cost in US dollars; admins and owners only")
     priority: int
     reception_action: int
 

@@ -33,6 +33,10 @@ class Staff:
         if ROLE_RANK[role] < ROLE_RANK[min_role]:
             raise HTTPException(status_code=403, detail="Insufficient role")
 
+    def has_role(self, clinic_id: uuid.UUID, min_role: str) -> bool:
+        role = self.roles.get(clinic_id)
+        return role is not None and ROLE_RANK[role] >= ROLE_RANK[min_role]
+
 
 async def current_staff(request: Request) -> Staff:
     verifier: TokenVerifier | None = request.app.state.verifier

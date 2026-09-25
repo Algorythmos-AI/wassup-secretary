@@ -1,7 +1,7 @@
 import { useAuth } from "../auth/auth";
 import "../styles/signin.css";
 
-export function NoAccess({ reason }: { reason: "no_access" | "unavailable" }) {
+export function NoAccess({ reason }: { reason: "no_access" | "not_accepted" | "unavailable" }) {
   const { email, signOut } = useAuth();
   return (
     <main className="signin">
@@ -11,8 +11,13 @@ export function NoAccess({ reason }: { reason: "no_access" | "unavailable" }) {
           <p>
             {email} isn't linked to a clinic yet. Ask your practice manager to add you, then sign in again.
           </p>
+        ) : reason === "not_accepted" ? (
+          <p>
+            Your sign-in for {email} wasn't accepted. If you sign in with an email and password, your
+            email address needs to be verified first: ask your practice manager to resend the invitation.
+          </p>
         ) : (
-          <p>Can't reach WASSUP right now. Check the connection, then reload the page.</p>
+          <p role="status">Can't reach WASSUP right now. Trying again automatically…</p>
         )}
         <button type="button" className="button" onClick={() => void signOut()}>
           Sign out

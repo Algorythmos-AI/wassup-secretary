@@ -171,7 +171,7 @@
                 "type": "null"
               }
             ],
-            "description": "Voice-provider cost in US dollars, as a decimal string",
+            "description": "Voice-provider cost in US dollars, as a decimal string; admins and owners only",
             "title": "Cost Usd"
           },
           "direction": {
@@ -737,8 +737,16 @@
             "type": "integer"
           },
           "cost_usd": {
-            "title": "Cost Usd",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Voice cost in US dollars; admins and owners only",
+            "title": "Cost Usd"
           },
           "priority": {
             "title": "Priority",
@@ -1110,6 +1118,22 @@
               "description": "Only calls still to do (pending or following up)",
               "title": "Open Only",
               "type": "boolean"
+            }
+          },
+          {
+            "description": "newest first (default), or oldest first: who has waited longest",
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "default": "newest",
+              "description": "newest first (default), or oldest first: who has waited longest",
+              "enum": [
+                "newest",
+                "oldest"
+              ],
+              "title": "Order",
+              "type": "string"
             }
           }
         ],

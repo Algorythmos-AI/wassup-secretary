@@ -20,17 +20,35 @@ export const config = {
   },
 };
 
-/** Build settings a Firebase build is missing (empty when it is complete). */
-export function missingSettings(): string[] {
-  if (config.authMode === "test") return config.apiBase ? [] : ["VITE_API_BASE"];
-  const settings: [string, string | undefined][] = [
-    ["VITE_API_BASE", config.apiBase],
-    ["VITE_FIREBASE_API_KEY", config.firebase.apiKey],
-    ["VITE_FIREBASE_AUTH_DOMAIN", config.firebase.authDomain],
-    ["VITE_FIREBASE_PROJECT_ID", config.firebase.projectId],
-    ["VITE_FIREBASE_APP_ID", config.firebase.appId],
-  ];
-  return settings.filter(([, value]) => !value).map(([name]) => name);
+/** Shapes of values that are easy to paste into the wrong setting. */
+const SHAPES: Record<string, RegExp> = {
+  VITE_API_BASE: /^https?:\/\/[^/\s]+$/,
+  VITE_FIREBASE_API_KEY: /^AIza[0-9A-Za-z_-]{35}$/,
+  VITE_FIREBASE_AUTH_DOMAIN: /^[a-z0-9.-]+\.[a-z]{2,}$/,
+  VITE_FIREBASE_APP_ID: /^\d+:\d+:web:[0-9a-f]+$/,
+};
+
+/**
+ * Build settings that are missing, or that hold something else (a domain pasted where the API
+ * key goes, say), each named for the administrator. Empty when the build is complete. Nothing
+ * here is secret, but the values are never shown: only which setting to fix.
+ */
+export function settingProblems(): string[] {
+  const settings: [string, string | undefined][] =
+    config.authMode === "test"
+      ? [["VITE_API_BASE", config.apiBase]]
+      : [
+          ["VITE_API_BASE", config.apiBase],
+          ["VITE_FIREBASE_API_KEY", config.firebase.apiKey],
+          ["VITE_FIREBASE_AUTH_DOMAIN", config.firebase.authDomain],
+          ["VITE_FIREBASE_PROJECT_ID", config.firebase.projectId],
+          ["VITE_FIREBASE_APP_ID", config.firebase.appId],
+        ];
+  return settings.flatMap(([name, value]) => {
+    if (!value) return [`${name} is not set`];
+    const shape = SHAPES[name];
+    return shape && !shape.test(value) ? [`${name} doesn't look right`] : [];
+  });
 }
 
 export function firebaseOptions() {

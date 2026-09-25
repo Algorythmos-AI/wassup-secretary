@@ -7,7 +7,7 @@ import json
 import random
 import time
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -166,10 +166,15 @@ async def ops_engine(db_url: str) -> AsyncIterator[AsyncEngine]:
     await engine.dispose()
 
 
-def _runs(db_engine: Engine, lines: list[str]) -> dict[str, dict[str, Any]]:
+def _runs(
+    db_engine: Engine, lines: list[str], run_date: str = "2026-09-22"
+) -> dict[str, dict[str, Any]]:
+    """The runs of one local day (MORNING's by default). Ticks at the real "now" legitimately
+    start today's runs too once 07:30 Sydney has passed, so never mix days."""
     with db_engine.connect() as conn:
         rows = conn.execute(
-            text("SELECT * FROM canary_runs WHERE to_number = ANY(:l)"), {"l": lines}
+            text("SELECT * FROM canary_runs WHERE to_number = ANY(:l) AND run_date = :d"),
+            {"l": lines, "d": date.fromisoformat(run_date)},
         ).mappings()
         return {r["to_number"]: dict(r) for r in rows}
 

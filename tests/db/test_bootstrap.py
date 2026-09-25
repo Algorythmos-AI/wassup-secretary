@@ -53,7 +53,8 @@ def test_bootstrap_sets_every_login_password_idempotently(
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                "SELECT rolname, rolcanlogin, rolpassword IS NOT NULL AS has_password FROM pg_authid WHERE rolname = ANY(:r)"
+                "SELECT rolname, rolcanlogin, rolpassword IS NOT NULL AS has_password "
+                "FROM pg_authid WHERE rolname = ANY(:r)"
             ),
             {"r": list(passwords)},
         ).all()

@@ -122,7 +122,8 @@ async def test_resume_delivers_only_this_clinics_events_in_order(
     async with _app(core_engine) as client:
         frames = await _read(client, seed.clinic_a, **{"Last-Event-ID": before})
     delivered = [(f["id"], f["event"]) for f in frames if "id" in f and f["event"] != "reauth"]
-    assert delivered == [(first, "message.urgent"), (second, "call.workflow")]
+    # The stream opens at the resume point, then delivers what came after it.
+    assert delivered == [(before, "ready"), (first, "message.urgent"), (second, "call.workflow")]
     assert "call_other_clinic" not in str(frames)
     assert frames[-1]["event"] == "reauth"  # the stream ended at its time limit, on purpose
 
@@ -133,7 +134,10 @@ async def test_a_fresh_stream_starts_at_now(
     _emit(db_engine, seed.clinic_a, "call.analyzed")
     async with _app(core_engine) as client:
         frames = await _read(client, seed.clinic_a)
-    assert [f["event"] for f in frames] == ["reauth"]  # history is fetched over REST, not replayed
+    # History is fetched over REST, not replayed. The stream still opens with its position, so
+    # a client that reconnects before any event arrives resumes there instead of at "now".
+    assert [f["event"] for f in frames] == ["ready", "reauth"]
+    assert frames[0].get("id")
 
 
 async def test_far_behind_gets_a_reset_not_a_flood(

@@ -132,7 +132,10 @@ async def summary(
             "calls": totals["calls"],
             "avg_duration_seconds": totals["avg_duration_seconds"],
             "total_duration_seconds": totals["total_duration_seconds"],
-            "cost_usd": str(cost.quantize(Decimal("0.01"))),
+            # Billing is for admins and owners (as /usage is); other roles see no cost.
+            "cost_usd": str(cost.quantize(Decimal("0.01")))
+            if staff.has_role(clinic_id, "admin")
+            else None,
             "priority": totals["priority"],
             "reception_action": totals["reception_action"],
         },

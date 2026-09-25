@@ -5,8 +5,8 @@
 **/.mypy_cache
 **/.ruff_cache
 docs
-.env
-.env.*
+**/.env
+**/.env.*
 **/node_modules
 **/dist
 **/*.tsbuildinfo

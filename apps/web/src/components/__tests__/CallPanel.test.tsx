@@ -131,6 +131,36 @@ describe("CallPanel", () => {
     expect(screen.getByText("Urgent message")).toBeInTheDocument();
   });
 
+  it("never lets a slow response for the previous call replace the one on screen", async () => {
+    let releaseA: (d: CallDetail) => void = () => {};
+    api.call.mockImplementation((_clinic: string, id: string) =>
+      id === "call-A"
+        ? new Promise<CallDetail>((resolve) => (releaseA = resolve))
+        : Promise.resolve(detail({ id: "call-B", summary: "Call B summary.", version: 7 })),
+    );
+    api.setStatus.mockResolvedValue({ call_id: "call-B", workflow_status: "following_up", version: 8 });
+    const props = {
+      clinicId: "clinic-1",
+      timeZone: "Australia/Sydney",
+      canEdit: true,
+      refreshSignal: 0,
+      onChanged: () => undefined,
+      onClose: () => undefined,
+    };
+    const { rerender } = render(<CallPanel {...props} callId="call-A" />);
+    rerender(<CallPanel {...props} callId="call-B" />);
+    expect(await screen.findByText("Call B summary.")).toBeInTheDocument();
+    releaseA(detail({ id: "call-A", summary: "Call A summary.", version: 1 })); // arrives last
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText("Call A summary.")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Start follow-up" }));
+    await waitFor(() => expect(api.setStatus).toHaveBeenCalledOnce());
+    const [, callId, change] = api.setStatus.mock.calls[0]!;
+    expect(callId).toBe("call-B");
+    expect(change.version).toBe(7);
+  });
+
   it("says when a call isn't available", async () => {
     api.call.mockRejectedValue(new ApiError(404, "not_found", "Not found"));
     renderPanel();

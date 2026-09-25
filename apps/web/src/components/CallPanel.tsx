@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import type { CallDetail, WorkflowStatus } from "../api/types";
 import { useSession } from "../auth/session";
@@ -46,11 +46,20 @@ export function CallPanel({ clinicId, callId, timeZone, canEdit, refreshSignal, 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  // The call this panel is showing right now. A slow response for a call the user has already
+  // moved on from must never replace the one on screen (the buttons act on what is shown).
+  const showing = useRef(callId);
+  showing.current = callId;
+
   const load = useCallback(async () => {
+    const requested = callId;
     try {
-      setDetail(await api.call(clinicId, callId));
+      const fetched = await api.call(clinicId, requested);
+      if (requested !== showing.current || fetched.call.id !== requested) return;
+      setDetail(fetched);
       setError(null);
     } catch (e) {
+      if (requested !== showing.current) return;
       setError(e instanceof ApiError && e.status === 404 ? "This call isn't available." : "Couldn't load this call. Try again.");
     }
   }, [api, clinicId, callId]);
@@ -67,19 +76,21 @@ export function CallPanel({ clinicId, callId, timeZone, canEdit, refreshSignal, 
   }, [refreshSignal, load]);
 
   async function change(status: WorkflowStatus) {
-    if (!detail) return;
+    // Act only on the call actually displayed, with the version the user actually saw.
+    if (!detail || detail.call.id !== callId || saving) return;
+    const target = detail.call;
     setSaving(true);
     setMessage(null);
     try {
-      const result = await api.setStatus(clinicId, callId, {
+      const result = await api.setStatus(clinicId, target.id, {
         status,
         note: note.trim() || undefined,
-        version: detail.call.version,
+        version: target.version,
         key: crypto.randomUUID(),
       });
       setNote("");
       setMessage(`Marked ${STATUS_LABEL[result.workflow_status].toLowerCase()}.`);
-      onChanged(callId, result.workflow_status, result.version);
+      onChanged(target.id, result.workflow_status, result.version);
       await load();
     } catch (e) {
       if (e instanceof ApiError && e.status === 412) {

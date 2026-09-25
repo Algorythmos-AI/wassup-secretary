@@ -159,8 +159,14 @@ async def _stream(
             deadline = min(deadline, staff.expires_at)
         cursor, reset = await _start(engine, clinic_id, resume)
         yield "retry: 3000\n\n"
+        # Every stream opens with its start position as an event id, so a client that
+        # reconnects before any real event arrives still resumes exactly where it was (without
+        # it, a reconnect would restart at "now" and skip whatever was committed in between).
+        # Clients reload their lists on it: nothing committed before it can be missed.
         if reset:
             yield _frame("reset", {"reason": "too_far_behind"}, cursor)
+        else:
+            yield _frame("ready", {}, cursor)
         next_check = now + MEMBERSHIP_RECHECK_S
         next_keepalive = now + KEEPALIVE_S
         while time.time() < deadline:

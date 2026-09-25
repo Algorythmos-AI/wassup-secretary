@@ -128,7 +128,7 @@ async def test_summary_totals_and_series(client: httpx.AsyncClient, clinic: uuid
         "calls": 4,
         "avg_duration_seconds": 70,  # (60 + 120 + 30) / 3; a call without duration is not zero
         "total_duration_seconds": 210,
-        "cost_usd": "0.35",
+        "cost_usd": None,  # a viewer: billing is for admins and owners
         "priority": 1,
         "reception_action": 0,
     }
@@ -216,3 +216,22 @@ async def test_usage_is_for_admins_only_and_totals_add_up(
             )
     assert [d["date"] for d in body["days"]] == ["2026-09-01", "2026-09-03"]
     assert body["totals"] == {"calls": 3, "minutes": "3.50", "provider_cost_usd": "0.3525"}
+
+
+async def test_voice_cost_is_shown_to_admins_only(
+    client: httpx.AsyncClient, db_engine: Engine, clinic: uuid.UUID
+) -> None:
+    params = {"from": "2026-09-01", "to": "2026-09-07"}
+    assert (await _get(client, clinic, **params)).json()["totals"]["cost_usd"] is None
+    promote = (
+        "UPDATE clinic_memberships SET role = :r WHERE clinic_id = :c AND staff_user_id = "
+        "(SELECT id FROM staff_users WHERE firebase_uid = 'uid-analyst')"
+    )
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(text(promote), {"c": clinic, "r": "admin"})
+    try:
+        body = (await _get(client, clinic, **params)).json()
+    finally:
+        with db_engine.connect() as conn, conn.begin():
+            conn.execute(text(promote), {"c": clinic, "r": "viewer"})
+    assert body["totals"]["cost_usd"] == "0.35"

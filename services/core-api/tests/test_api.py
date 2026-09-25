@@ -203,7 +203,8 @@ async def test_workflow_update_is_idempotent_and_optimistically_locked(
             .scalars()
             .all()
         )
-    assert live == [{"call_id": str(call_id), "version": 2}]  # other screens hear about it once
+    # Other screens hear about it once, with the new status (ids and a status, no personal data).
+    assert live == [{"call_id": str(call_id), "version": 2, "workflow_status": "addressed"}]
 
 
 async def test_viewer_cannot_change_workflow(
@@ -427,3 +428,53 @@ async def test_urgent_messages_are_flagged_in_the_list_and_the_detail(
     ).json()
     assert detail["call"]["has_urgent_message"] is True
     assert sorted(m["urgent"] for m in detail["messages"]) == [False, True]
+
+
+async def test_oldest_first_pages_through_everything_and_cursors_keep_their_order(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    ids = _new_calls(db_engine, seed.clinic_b, 5)  # started one minute apart, oldest first
+    seen: list[str] = []
+    cursor = None
+    while True:
+        params: dict[str, Any] = {"limit": 2, "order": "oldest"}
+        if cursor:
+            params["cursor"] = cursor
+        page = (
+            await client.get(
+                f"/v1/clinics/{seed.clinic_b}/calls", params=params, headers=_auth(ADMIN_AB)
+            )
+        ).json()
+        seen += [i["id"] for i in page["items"]]
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+    mine = [i for i in seen if i in {str(x) for x in ids}]
+    assert mine == [str(x) for x in ids]  # oldest first, none skipped or repeated
+    assert len(seen) == len(set(seen))
+
+    first = (
+        await client.get(
+            f"/v1/clinics/{seed.clinic_b}/calls",
+            params={"limit": 1, "order": "oldest"},
+            headers=_auth(ADMIN_AB),
+        )
+    ).json()
+    mixed = await client.get(
+        f"/v1/clinics/{seed.clinic_b}/calls",
+        params={"limit": 1, "cursor": first["next_cursor"]},  # an oldest-first cursor, newest order
+        headers=_auth(ADMIN_AB),
+    )
+    assert mixed.status_code == 400
+
+
+async def test_call_cost_is_for_admins_only(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(text("UPDATE calls SET cost_usd = 0.1234 WHERE id = :id"), {"id": seed.call_a})
+    url = f"/v1/clinics/{seed.clinic_a}/calls/{seed.call_a}"
+    receptionist = (await client.get(url, headers=_auth(RECEPTIONIST_A))).json()
+    admin = (await client.get(url, headers=_auth(ADMIN_AB))).json()
+    assert receptionist["call"]["cost_usd"] is None
+    assert admin["call"]["cost_usd"] == "0.1234"

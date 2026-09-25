@@ -193,7 +193,7 @@ export interface components {
             analyzed_at: string | null;
             /**
              * Cost Usd
-             * @description Voice-provider cost in US dollars, as a decimal string
+             * @description Voice-provider cost in US dollars, as a decimal string; admins and owners only
              */
             cost_usd: string | null;
             /**
@@ -388,8 +388,11 @@ export interface components {
             avg_duration_seconds: number | null;
             /** Calls */
             calls: number;
-            /** Cost Usd */
-            cost_usd: string;
+            /**
+             * Cost Usd
+             * @description Voice cost in US dollars; admins and owners only
+             */
+            cost_usd: string | null;
             /** Priority */
             priority: number;
             /** Reception Action */
@@ -539,6 +542,8 @@ export interface operations {
                 cursor?: string | null;
                 /** @description Only calls still to do (pending or following up) */
                 open_only?: boolean;
+                /** @description newest first (default), or oldest first: who has waited longest */
+                order?: "newest" | "oldest";
             };
             header?: never;
             path: {

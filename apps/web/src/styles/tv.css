@@ -200,3 +200,10 @@
     grid-template-columns: 1fr;
   }
 }
+
+.tv--message {
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  font-size: clamp(18px, 1.6vw, 40px);
+}

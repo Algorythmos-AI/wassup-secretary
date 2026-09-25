@@ -7,7 +7,10 @@ import { useAuth } from "./auth";
 interface Session {
   api: Api;
   me: Me | null;
-  error: "no_access" | "unavailable" | null;
+  /** no_access: not a member of any clinic. not_accepted: the sign-in token is rejected even
+   * after a refresh (e.g. an email address not yet verified). unavailable: can't reach the API
+   * right now; it keeps retrying. */
+  error: "no_access" | "not_accepted" | "unavailable" | null;
   clinic: (id: string | undefined) => ClinicAccess | undefined;
 }
 
@@ -25,20 +28,32 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return;
     }
     let cancelled = false;
-    api
-      .me()
-      .then((m) => {
-        if (!cancelled) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = 2000;
+    // An office TV can boot before its network is up, or during an API deploy: keep trying,
+    // more slowly each time, until it works. Only a definite answer stops it.
+    const attempt = () => {
+      api
+        .me()
+        .then((m) => {
+          if (cancelled) return;
           setMe(m);
           setError(null);
-        }
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setError(e instanceof ApiError && (e.status === 403 || e.status === 404) ? "no_access" : "unavailable");
-      });
+        })
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          const code = e instanceof ApiError ? e.status : 0;
+          if (code === 403 || code === 404) return setError("no_access");
+          if (code === 401) return setError("not_accepted");
+          setError("unavailable");
+          timer = setTimeout(attempt, delay);
+          delay = Math.min(delay * 2, 60_000);
+        });
+    };
+    attempt();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [api, status]);
 

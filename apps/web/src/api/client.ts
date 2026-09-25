@@ -24,6 +24,9 @@ export class ApiError extends Error {
   }
 }
 
+/** One path segment. Ids come from URLs people can edit (?call=…): never let them add path. */
+const seg = (value: string) => encodeURIComponent(value);
+
 export type TokenSource = (forceRefresh?: boolean) => Promise<string>;
 
 export class Api {
@@ -65,16 +68,17 @@ export class Api {
 
   calls(
     clinicId: string,
-    options: { limit?: number; cursor?: string | null; openOnly?: boolean } = {},
+    options: { limit?: number; cursor?: string | null; openOnly?: boolean; order?: "newest" | "oldest" } = {},
   ): Promise<CallPage> {
     const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
     if (options.cursor) params.set("cursor", options.cursor);
     if (options.openOnly) params.set("open_only", "true");
-    return this.request(`/v1/clinics/${clinicId}/calls?${params}`);
+    if (options.order && options.order !== "newest") params.set("order", options.order);
+    return this.request(`/v1/clinics/${seg(clinicId)}/calls?${params}`);
   }
 
   call(clinicId: string, callId: string): Promise<CallDetail> {
-    return this.request(`/v1/clinics/${clinicId}/calls/${callId}`);
+    return this.request(`/v1/clinics/${seg(clinicId)}/calls/${seg(callId)}`);
   }
 
   /** Change a call's status. `version` is the one the user saw (412 if someone else changed it
@@ -84,7 +88,7 @@ export class Api {
     callId: string,
     change: { status: WorkflowStatus; note?: string; version: number; key: string },
   ): Promise<WorkflowResult> {
-    return this.request(`/v1/clinics/${clinicId}/calls/${callId}/workflow`, {
+    return this.request(`/v1/clinics/${seg(clinicId)}/calls/${seg(callId)}/workflow`, {
       method: "POST",
       headers: { "Idempotency-Key": change.key, "If-Match": String(change.version) },
       body: JSON.stringify({ status: change.status, note: change.note || null }),
@@ -93,11 +97,11 @@ export class Api {
 
   analytics(clinicId: string, range: { from?: string; to?: string } = {}): Promise<AnalyticsSummary> {
     const params = new URLSearchParams(Object.entries(range).filter(([, v]) => v) as [string, string][]);
-    return this.request(`/v1/clinics/${clinicId}/analytics/summary?${params}`);
+    return this.request(`/v1/clinics/${seg(clinicId)}/analytics/summary?${params}`);
   }
 
   usage(clinicId: string, range: { from?: string; to?: string } = {}): Promise<UsageReport> {
     const params = new URLSearchParams(Object.entries(range).filter(([, v]) => v) as [string, string][]);
-    return this.request(`/v1/clinics/${clinicId}/usage?${params}`);
+    return this.request(`/v1/clinics/${seg(clinicId)}/usage?${params}`);
   }
 }

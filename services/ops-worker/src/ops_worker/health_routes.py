@@ -141,3 +141,14 @@ async def quarantine_health(request: Request) -> JSONResponse:
     quarantined call is on no dashboard), or when the check is stale or never ran."""
     report = request.app.state.quarantine.report()
     return _respond(report, report["status"] != "ok")
+
+
+@router.get("/health/backup", include_in_schema=False)
+async def backup_health(request: Request) -> JSONResponse:
+    """The latest backup, from memory (counts and names only). 503 when the last one failed,
+    none has been made for 36 hours, or backups aren't configured."""
+    monitor = request.app.state.backup
+    if monitor is None:
+        return JSONResponse({"status": "unconfigured"}, status_code=503)
+    report = monitor.report()
+    return _respond(report, report["status"] == "failing")

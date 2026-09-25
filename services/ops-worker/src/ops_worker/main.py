@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.app import create_app
+from wassup_core.backups import key_from_hex, store_from_env
 from wassup_core.db import make_engine
 
-from ops_worker import canary, quarantine, replay, retention, telephony, usage, voice_config
+from ops_worker import backup, canary, quarantine, replay, retention, telephony, usage, voice_config
 from ops_worker.health_routes import install_probes
 from ops_worker.health_routes import router as health_router
 from ops_worker.notifier import EmailSender, NotConfiguredSender, ResendEmailSender
@@ -143,6 +146,28 @@ def _scheduled_jobs(
             )
         )
 
+    backups: backup.BackupMonitor | None = app.state.backup
+    if backups is not None:
+        live_backup = backups
+        backup_url = settings.backup_database_url.get_secret_value()  # type: ignore[union-attr]
+        backup_key = key_from_hex(settings.backup_key_hex.get_secret_value())  # type: ignore[union-attr]
+        backup_store = app.state.backup_store
+
+        async def run_backup() -> dict[str, Any]:
+            return await asyncio.to_thread(
+                backup.backup_once,
+                backup_url,
+                backup_key,
+                backup_store,
+                live_backup.config.environment,
+                keep=live_backup.config.keep,
+            )
+
+        async def backup_job() -> str:
+            return await backup.tick(live_backup, backup_store, run_backup, sender)
+
+        jobs.append(("backup", 60.0, backup_job, ""))  # heartbeat pinged by the job itself
+
     cfg: canary.CanaryConfig = app.state.canary_config
     live_retell: RetellApi | None = app.state.retell
     if cfg.enabled and live_retell is not None:
@@ -169,6 +194,22 @@ def build_app(
     app.state.retell = retell
     install_probes(app.state)
     app.state.quarantine = quarantine.QuarantineMonitor(settings.ops_emails)
+    app.state.backup_store = store_from_env(dict(os.environ))
+    app.state.backup = (
+        backup.BackupMonitor(
+            backup.BackupConfig(
+                environment="production" if settings.is_production else settings.environment.value,
+                local_time=settings.backup_local_time,
+                timezone=settings.backup_timezone,
+                keep=settings.backup_keep,
+                ops_emails=settings.ops_emails,
+                heartbeat_url=settings.backup_heartbeat_url,
+                on_start=settings.backup_on_start,
+            )
+        )
+        if settings.backup_database_url and settings.backup_key_hex and app.state.backup_store
+        else None
+    )
     app.state.voice_config = (
         voice_config.VoiceConfigMonitor(
             environment="production" if settings.is_production else "staging",

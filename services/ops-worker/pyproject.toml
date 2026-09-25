@@ -11,6 +11,7 @@ dependencies = [
   # Migrations run from this image (Railway pre-deploy step), as the migrator role.
   "alembic>=1.13",
   "psycopg[binary]>=3.2",
+  "boto3>=1.35",
 ]
 
 [tool.uv.sources]

@@ -63,6 +63,15 @@ class OpsWorkerSettings(BaseServiceSettings):
     raw_retention_days: int = 90
     retention_interval_s: float = 6 * 3600
     retention_heartbeat_url: str = ""
+    # Nightly encrypted backup (ops_worker.backup). Needs the backup role's own URL, the key, and a
+    # store: an S3-compatible bucket (WASSUP_BACKUP_S3_*) or a directory (WASSUP_BACKUP_DIR).
+    backup_database_url: SecretStr | None = None
+    backup_key_hex: SecretStr | None = None
+    backup_local_time: str = "03:30"
+    backup_timezone: str = "Australia/Sydney"
+    backup_keep: int = 30
+    backup_on_start: bool = False
+    backup_heartbeat_url: str = ""
 
     @property
     def telephony_configured(self) -> bool:

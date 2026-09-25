@@ -10,8 +10,11 @@
 --   app_voice        LOGIN     voice-gateway
 --   app_core         LOGIN     core-api
 --   app_ops          LOGIN     ops-worker
+--   wassup_backup    LOGIN     the backup job only: SELECT on every table and nothing else. It is
+--                              the ONE role that bypasses row-level security (a backup must hold
+--                              every clinic's rows); tests/tenancy pins that it can write nothing.
 --
--- None of them is SUPERUSER or BYPASSRLS, so row-level security always applies.
+-- None of the app roles is SUPERUSER or BYPASSRLS, so row-level security always applies to them.
 -- Passwords are set out-of-band by the operator (never in git):
 --   ALTER ROLE app_core PASSWORD '...';
 
@@ -35,6 +38,9 @@ BEGIN
       EXECUTE format('CREATE ROLE %I LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOINHERIT', r);
     END IF;
   END LOOP;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wassup_backup') THEN
+    CREATE ROLE wassup_backup LOGIN NOSUPERUSER BYPASSRLS NOCREATEROLE NOCREATEDB NOINHERIT;
+  END IF;
 END
 $$;
 
@@ -47,11 +53,17 @@ GRANT wassup_auditor TO wassup_owner;
 ALTER ROLE app_voice SET statement_timeout = '1s';
 ALTER ROLE app_core  SET statement_timeout = '5s';
 ALTER ROLE app_ops   SET statement_timeout = '60s';
+-- A full dump is one long read-only snapshot; it must never be able to write (default_transaction
+-- read-only is belt and braces on top of having no INSERT/UPDATE/DELETE anywhere).
+ALTER ROLE wassup_backup SET statement_timeout = '30min';
+ALTER ROLE wassup_backup SET default_transaction_read_only = on;
 -- An abandoned open transaction would hold back live events (core-api streams only rows from
 -- transactions older than every running one) and block vacuum: end it after 30 s idle.
 ALTER ROLE app_voice SET idle_in_transaction_session_timeout = '30s';
 ALTER ROLE app_core  SET idle_in_transaction_session_timeout = '30s';
 ALTER ROLE app_ops   SET idle_in_transaction_session_timeout = '30s';
+ALTER ROLE wassup_backup SET idle_in_transaction_session_timeout = '60s';
 ALTER ROLE app_voice CONNECTION LIMIT 20;
 ALTER ROLE app_core  CONNECTION LIMIT 40;
 ALTER ROLE app_ops   CONNECTION LIMIT 10;
+ALTER ROLE wassup_backup CONNECTION LIMIT 2;

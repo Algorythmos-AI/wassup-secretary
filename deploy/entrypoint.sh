@@ -12,6 +12,9 @@
 #                                 run unless WASSUP_PATIENTS_APPLY=true) and exit
 #   WASSUP_ROLE=load-classifier-rules | activate-classifier-rules | reclassify
 #                                 a clinic's classification rules (db/classifier_rules.py) and exit
+#   WASSUP_ROLE=backup            one verified encrypted backup now (ops_worker.backup) and exit
+#   WASSUP_ROLE=restore           restore an archive into THIS database (db/restore.py; a dry run
+#                                 unless WASSUP_RESTORE_APPLY=true) and exit
 #   WASSUP_MIGRATE_ON_START=true  (serve) apply migrations before starting — for platforms where
 #                                 the image's pre-deploy step isn't configured. Migrations hold an
 #                                 advisory lock, so concurrent starts are safe.
@@ -35,6 +38,12 @@ case "${WASSUP_ROLE:-serve}" in
     ;;
   load-classifier-rules|activate-classifier-rules|reclassify)
     exec python db/classifier_rules.py
+    ;;
+  backup)
+    exec python -m ops_worker.backup
+    ;;
+  restore)
+    exec python db/restore.py
     ;;
   serve)
     if [ "${WASSUP_MIGRATE_ON_START:-false}" = "true" ]; then

@@ -37,7 +37,7 @@ Instead of steps 2 and 3 above, add a one-shot **`db-admin`** service. It runs `
 Set these on `db-admin`:
 - `SERVICE=ops-worker` (it reuses that image);
 - `WASSUP_ADMIN_DATABASE_URL=${{Postgres.DATABASE_URL}}`;
-- `WASSUP_PASSWORD_MIGRATOR`, `WASSUP_PASSWORD_APP_VOICE`, `WASSUP_PASSWORD_APP_CORE` and `WASSUP_PASSWORD_APP_OPS`, each set to `${{secret(40)}}`.
+- `WASSUP_PASSWORD_MIGRATOR`, `WASSUP_PASSWORD_APP_VOICE`, `WASSUP_PASSWORD_APP_CORE`, `WASSUP_PASSWORD_APP_OPS` and `WASSUP_PASSWORD_BACKUP`, each set to `${{secret(40)}}`.
 
 The app services then reference those generated values, for example:
 `WASSUP_DATABASE_URL=postgresql://app_core:${{db-admin.WASSUP_PASSWORD_APP_CORE}}@${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}`.
@@ -47,6 +47,7 @@ On services that weren't created from a connected repository, Railway ignores co
 - `WASSUP_ROLE=seed-synthetic` adds a synthetic clinic (refused in production).
 - `WASSUP_ROLE=report` prints counts only.
 - `WASSUP_MIGRATE_ON_START=true`, set on ops-worker, applies migrations before serving.
+- `WASSUP_ROLE=backup` takes one verified backup; `WASSUP_ROLE=restore` loads one (`restore-drill.md`).
 
 ## 1c. Deploying exact commits
 
@@ -83,7 +84,7 @@ Railway service settings:
 |---|---|---|---|---|
 | voice-gateway | `wassup-secretary-voice-gateway` | default CMD | — | `WASSUP_DATABASE_URL` (app_voice), `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_ENVIRONMENT` |
 | core-api | `wassup-secretary-core-api` | default CMD | — | `WASSUP_DATABASE_URL` (app_core), `WASSUP_FIREBASE_PROJECT_ID`, `WASSUP_CORS_ORIGINS`, `WASSUP_ENVIRONMENT` |
-| ops-worker | `wassup-secretary-ops-worker` | default CMD | `alembic -c db/alembic.ini upgrade head` with `WASSUP_MIGRATION_DATABASE_URL` (migrator) | `WASSUP_DATABASE_URL` (app_ops), `WASSUP_RESEND_API_KEY`, `WASSUP_ALERT_EMAIL_FROM`, `WASSUP_OPS_ALERT_EMAILS`, `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_VOICE_GATEWAY_URL` (private-network URL, enables replay), `WASSUP_TWILIO_ACCOUNT_SID` + `WASSUP_TWILIO_API_KEY_SID` + `WASSUP_TWILIO_API_KEY_SECRET` (telephony monitor; an API key, never the auth token), `WASSUP_TELEPHONY_MIN_BALANCE`, `WASSUP_VOICE_WEBHOOK_URL` (the voice-gateway webhook every published agent version must post to), heartbeat URLs |
+| ops-worker | `wassup-secretary-ops-worker` | default CMD | `alembic -c db/alembic.ini upgrade head` with `WASSUP_MIGRATION_DATABASE_URL` (migrator) | `WASSUP_DATABASE_URL` (app_ops), `WASSUP_RESEND_API_KEY`, `WASSUP_ALERT_EMAIL_FROM`, `WASSUP_OPS_ALERT_EMAILS`, `WASSUP_RETELL_API_KEY`, `WASSUP_AI_LINE_NUMBERS`, `WASSUP_VOICE_GATEWAY_URL` (private-network URL, enables replay), `WASSUP_TWILIO_ACCOUNT_SID` + `WASSUP_TWILIO_API_KEY_SID` + `WASSUP_TWILIO_API_KEY_SECRET` (telephony monitor; an API key, never the auth token), `WASSUP_TELEPHONY_MIN_BALANCE`, `WASSUP_VOICE_WEBHOOK_URL` (the voice-gateway webhook every published agent version must post to), `WASSUP_BACKUP_DATABASE_URL` + `WASSUP_BACKUP_KEY_HEX` + a store (`WASSUP_BACKUP_S3_*` or `WASSUP_BACKUP_DIR`; see `restore-drill.md`), heartbeat URLs |
 
 - Set `WASSUP_ENVIRONMENT` to `staging` or `production`. In these environments the API docs are off and test sign-in is refused. If it is not set, it defaults to `production`, which fails closed.
 - Keep the database on the platform's **private network**, with its public TCP proxy off.
@@ -129,6 +130,7 @@ Then add staff: a `staff_users` row keyed by their Firebase uid, plus `clinic_me
 - Alert on non-2xx from ops-worker `/health/freshness` (ingestion gap).
 - Alert on non-2xx from ops-worker `/health/canary`, once the line check is enabled.
 - Alert on non-2xx from ops-worker `/health/outbox`, which covers dead letters, overdue alerts and repeated failures. See the [runbook](outbox-dead-letter.md).
+- Alert on non-2xx from ops-worker `/health/backup` (last night's backup failed, or none for 36 hours). See [restore-drill](restore-drill.md).
 - Alert on non-2xx from ops-worker `/health/replay`, which covers webhook events or tool requests that couldn't be processed. See the [runbook](replay-exhausted.md).
 - Alert on non-2xx from ops-worker `/health/telephony`: the account is suspended or closed, the balance is below the floor, a line number is missing from the account, or the check is stale. This is the September 2026 outage, caught in minutes.
 - Alert on non-2xx from ops-worker `/health/voice-config`, which fires when a clinic number is not bound to its clinic's agent, is on a draft or "latest" version, is not on the pinned version, or is on a version whose webhook isn't ours.

@@ -42,6 +42,12 @@ Set these on `db-admin`:
 The app services then reference those generated values, for example:
 `WASSUP_DATABASE_URL=postgresql://app_core:${{db-admin.WASSUP_PASSWORD_APP_CORE}}@${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}`.
 
+On services that weren't created from a connected repository, Railway ignores config-as-code files. The image therefore takes its behaviour from the environment instead (`deploy/entrypoint.sh`):
+- `WASSUP_ROLE=bootstrap` runs the role bootstrap once and exits.
+- `WASSUP_ROLE=seed-synthetic` adds a synthetic clinic (refused in production).
+- `WASSUP_ROLE=report` prints counts only.
+- `WASSUP_MIGRATE_ON_START=true`, set on ops-worker, applies migrations before serving.
+
 ## 1c. Deploying exact commits
 Run `scripts/deploy-railway.sh <environment> db-admin ops-worker voice-gateway core-api` from a clean checkout of the branch you're deploying.
 

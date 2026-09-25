@@ -28,15 +28,7 @@ an owner item in the provider (Identity Platform TOTP); the API does not yet enf
 
 ## First owner of a new clinic
 
-Until the clinic has an owner nobody can invite anyone. Add the first owner once, as the owner
-role, in one transaction:
-
-```sql
-INSERT INTO staff_users (firebase_uid, email) VALUES ('<uid>', '<email>')
-  ON CONFLICT (firebase_uid) DO UPDATE SET email = EXCLUDED.email;
-INSERT INTO clinic_memberships (clinic_id, staff_user_id, role)
-  SELECT '<clinic uuid>', id, 'owner' FROM staff_users WHERE firebase_uid = '<uid>';
-```
-
-Or, simpler: create an invitation row for the owner's email with role `owner` (as the owner
-role, under that clinic's scope) and let their first sign-in do the rest.
+Until the clinic has an owner nobody can invite anyone, and an invitation can't create the first
+owner (an invitation is accepted only if its inviter still ranks at or above the invited role).
+The first owner is added with the clinic itself: `db-admin` `WASSUP_ROLE=onboard-clinic`
+(go-live §3), from their sign-in account id and email.

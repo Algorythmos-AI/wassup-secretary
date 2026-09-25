@@ -4,6 +4,8 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
 
 ## [Unreleased]
 
+- Clinic onboarding without SQL: db-admin `WASSUP_ROLE=onboard-clinic` creates a clinic, maps its voice agents and numbers, and makes its first owner a member (dry run by default, audited, production acknowledgement). go-live §3 and the team runbook updated (an invitation can't create a first owner).
+
 ## [0.1.0] - 2026-09-27
 
 First release: everything below shipped to `integration` between 24 and 26 September 2026 and ran on staging, the final candidate for 24 hours under synthetic traffic.

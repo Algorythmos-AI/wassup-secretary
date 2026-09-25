@@ -16,6 +16,8 @@
 #   WASSUP_ROLE=ops               an operator decision from a runbook (db/ops_actions.py: list,
 #                                 requeue or abandon dead outbox events, resolve quarantine; a dry
 #                                 run unless WASSUP_OPS_APPLY=true) and exit
+#   WASSUP_ROLE=onboard-clinic    create a clinic and its first owner (db/onboard_clinic.py; a
+#                                 dry run unless WASSUP_CLINIC_APPLY=true) and exit
 #   WASSUP_ROLE=restore           restore an archive into THIS database (db/restore.py; a dry run
 #                                 unless WASSUP_RESTORE_APPLY=true) and exit
 #   WASSUP_MIGRATE_ON_START=true  (serve) apply migrations before starting — for platforms where
@@ -50,6 +52,9 @@ case "${WASSUP_ROLE:-serve}" in
     ;;
   ops)
     exec python db/ops_actions.py
+    ;;
+  onboard-clinic)
+    exec python db/onboard_clinic.py
     ;;
   serve)
     if [ "${WASSUP_MIGRATE_ON_START:-false}" = "true" ]; then

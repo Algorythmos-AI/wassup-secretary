@@ -58,3 +58,12 @@ For the clinics on the legacy dashboard, the private repository's `scripts/expor
 turns its classifier constants into this document, and `scripts/classifier-parity.mjs` proves the
 document reproduces the legacy classifier's tier on the clinic's real history (zero differences)
 before it is activated here.
+
+## Reading the result
+
+`db-admin` is a one-shot: a deploy is "complete" as soon as it starts, before it has finished
+working. Read its log only once it ends with its result line
+(`clinic <slug>: version N, X changed, Y unchanged`); an earlier read shows only the first
+steps. With `WASSUP_RULES_ACTIVATE=true` a load reclassifies straight away, so a separate
+reclassify afterwards reports 0 changed.
+

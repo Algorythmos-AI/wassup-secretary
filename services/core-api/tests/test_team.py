@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
+import core_api.team as team_module
 import httpx
 import pytest
 from core_api.main import build_app
@@ -332,7 +334,7 @@ async def test_nobody_changes_their_own_access(client: httpx.AsyncClient, seed: 
 
 
 async def test_concurrent_demotions_cannot_remove_the_last_owner(
-    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     members = f"/v1/clinics/{seed.clinic_a}/team/members"
     team = await _team(client, seed.clinic_a, OWNER_A)
@@ -341,6 +343,24 @@ async def test_concurrent_demotions_cannot_remove_the_last_owner(
     assert (
         await client.patch(f"{members}/{admin}", json={"role": "owner"}, headers=_auth(OWNER_A))
     ).status_code == 200
+    # Make the race deterministic: the first request to pass the owner count waits (up to a
+    # second) for the second one to reach the same point before it demotes. With the per-clinic
+    # lock the second request is queued in Postgres, so the first times out and goes on alone;
+    # without the lock both count two owners, both demote, and the clinic is left with none.
+    original = team_module._check_keeps_an_owner
+    arrived = 0
+    both_counted = asyncio.Event()
+
+    async def counted_then_wait(*args: Any) -> None:
+        nonlocal arrived
+        await original(*args)
+        arrived += 1
+        if arrived == 2:
+            both_counted.set()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(both_counted.wait(), 1.0)
+
+    monkeypatch.setattr(team_module, "_check_keeps_an_owner", counted_then_wait)
     # Two owners demote each other at the same moment: exactly one may succeed.
     results = await asyncio.gather(
         client.patch(f"{members}/{admin}", json={"role": "admin"}, headers=_auth(OWNER_A)),

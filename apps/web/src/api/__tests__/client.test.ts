@@ -30,13 +30,13 @@ describe("Api", () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(json({ call_id: "c", workflow_status: "addressed", version: 3 }));
     const api = new Api(async () => "t", "https://api.test", fetchImpl);
 
-    await api.setStatus("clinic", "call", { status: "addressed", note: "", version: 2, key: "key-12345678" });
+    await api.setStatus("clinic", "call", { status: "addressed", note: "", version: 2, key: "same-click-retried" });
     const [url, init] = fetchImpl.mock.calls[0]!;
     const headers = new Headers(init?.headers);
     expect(url).toBe("https://api.test/v1/clinics/clinic/calls/call/workflow");
     expect(init?.method).toBe("POST");
     expect(headers.get("If-Match")).toBe("2");
-    expect(headers.get("Idempotency-Key")).toBe("key-12345678");
+    expect(headers.get("Idempotency-Key")).toBe("same-click-retried");
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(JSON.parse(String(init?.body))).toEqual({ status: "addressed", note: null });
   });

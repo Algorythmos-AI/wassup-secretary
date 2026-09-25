@@ -20,6 +20,19 @@ export const config = {
   },
 };
 
+/** Build settings a Firebase build is missing (empty when it is complete). */
+export function missingSettings(): string[] {
+  if (config.authMode === "test") return config.apiBase ? [] : ["VITE_API_BASE"];
+  const settings: [string, string | undefined][] = [
+    ["VITE_API_BASE", config.apiBase],
+    ["VITE_FIREBASE_API_KEY", config.firebase.apiKey],
+    ["VITE_FIREBASE_AUTH_DOMAIN", config.firebase.authDomain],
+    ["VITE_FIREBASE_PROJECT_ID", config.firebase.projectId],
+    ["VITE_FIREBASE_APP_ID", config.firebase.appId],
+  ];
+  return settings.filter(([, value]) => !value).map(([name]) => name);
+}
+
 export function firebaseOptions() {
   return {
     apiKey: required("VITE_FIREBASE_API_KEY", config.firebase.apiKey),

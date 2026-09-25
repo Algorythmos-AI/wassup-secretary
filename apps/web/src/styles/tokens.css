@@ -1,0 +1,118 @@
+/* Reception desk palette: ruled white sheets in ink navy; triage colours carry meaning only. */
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-sans-condensed/500.css";
+@import "@fontsource/ibm-plex-sans-condensed/600.css";
+
+:root {
+  --ink: #1b2a41;
+  --ink-soft: #4f5f77;
+  --ink-faint: #7d8ba0;
+  --page: #edf1f5;
+  --sheet: #ffffff;
+  --rule: #dce3ea;
+  --gutter: #f3f6f9;
+  --teal: #0e7c7b;
+  --teal-strong: #0a5f5e;
+  --teal-wash: #e2f2f1;
+  --amber: #b45309;
+  --amber-wash: #fdf0e1;
+  --red: #b42318;
+  --red-wash: #fcebe9;
+  --focus: #1d6fd6;
+
+  --font: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --radius: 6px;
+  --rail: 232px;
+
+  color-scheme: light;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--page);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--sheet);
+  cursor: pointer;
+  font-weight: 500;
+}
+.button:hover {
+  border-color: var(--ink-faint);
+}
+.button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.button--primary {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+}
+.button--primary:hover {
+  background: var(--teal-strong);
+  border-color: var(--teal-strong);
+}
+
+.notice {
+  padding: 10px 14px;
+  border-left: 4px solid var(--amber);
+  background: var(--amber-wash);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.notice--error {
+  border-left-color: var(--red);
+  background: var(--red-wash);
+}

@@ -4,8 +4,8 @@ import { NotConfigured } from "../NotConfigured";
 
 describe("NotConfigured", () => {
   it("names the missing settings for the administrator", () => {
-    render(<NotConfigured missing={["VITE_FIREBASE_API_KEY"]} />);
+    render(<NotConfigured problems={["VITE_FIREBASE_API_KEY doesn't look right"]} />);
     expect(screen.getByText(/hasn't been set up yet/)).toBeInTheDocument();
-    expect(screen.getByText(/VITE_FIREBASE_API_KEY/)).toBeInTheDocument();
+    expect(screen.getByText("VITE_FIREBASE_API_KEY doesn't look right")).toBeInTheDocument();
   });
 });

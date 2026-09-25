@@ -2,16 +2,16 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AuthProvider } from "./auth/auth";
-import { missingSettings } from "./config";
+import { settingProblems } from "./config";
 import { NotConfigured } from "./pages/NotConfigured";
 import "./styles/tokens.css";
 
-const missing = missingSettings();
+const problems = settingProblems();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {missing.length > 0 ? (
-      <NotConfigured missing={missing} />
+    {problems.length > 0 ? (
+      <NotConfigured problems={problems} />
     ) : (
       <AuthProvider>
         <App />

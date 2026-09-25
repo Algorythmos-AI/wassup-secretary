@@ -90,21 +90,36 @@ Railway service settings:
 - Keep the database on the platform's **private network**, with its public TCP proxy off.
 - Health checks: `GET /health` on every service. Deploy verification: `/health` must report the expected `tree`.
 
-## 3. Onboard a clinic (data rows, as the owner role, in one transaction)
+## 3. Onboard a clinic
 
-Only the clinic, its agent, its number and its **first owner** are created by hand. Everyone else is invited from the dashboard's Team page (`docs/runbooks/team.md`).
+The clinic, its voice agents, its phone numbers and its **first owner** are created by the
+one-shot `db-admin` service; everyone else is invited from the dashboard's Team page
+(`docs/runbooks/team.md`). The database is private, so nothing here is typed as SQL.
 
-```sql
-SET ROLE wassup_owner;
-SELECT set_config('app.clinic_ids', '{<new-clinic-uuid>}', true);
-INSERT INTO organizations (id, name) VALUES (...);
-INSERT INTO clinics (id, organization_id, slug, name, state, timezone, alert_contacts, status)
-  VALUES ('<new-clinic-uuid>', ..., 'nsw', 'Australia/Sydney', '["alerts@clinic.example"]', 'active');
-INSERT INTO clinic_voice_agents (clinic_id, agent_id, agent_version, environment) VALUES (...);
-INSERT INTO clinic_phone_numbers (clinic_id, e164) VALUES (...);
-```
+1. Find the first owner's sign-in account id: they sign in to the dashboard once (they will see
+   "isn't linked to a clinic yet"), then Firebase console → Authentication → Users → their row →
+   copy the **User UID**.
+2. Set on `db-admin` in the target environment:
+   - `WASSUP_ROLE=onboard-clinic`
+   - `WASSUP_CLINIC_SLUG` (short id, e.g. `regenu`; it appears in the agent's tool URLs),
+     `WASSUP_CLINIC_NAME`, `WASSUP_CLINIC_STATE` (`NSW`, `VIC`, …), `WASSUP_CLINIC_TIMEZONE`
+     (default `Australia/Sydney`), optionally `WASSUP_CLINIC_ORGANIZATION`
+   - `WASSUP_CLINIC_OWNER_UID`, `WASSUP_CLINIC_OWNER_EMAIL`
+   - optionally `WASSUP_CLINIC_AGENT_IDS`, `WASSUP_CLINIC_NUMBERS` (comma-separated; these make
+     the clinic's calls route here once its agent posts to this platform) and
+     `WASSUP_CLINIC_ALERT_EMAILS` (urgent-message recipients)
+3. Deploy `db-admin`: a dry run. Wait for the log to end `dry run: checked, then rolled back`;
+   it prints the new clinic id and what would be added (never the owner's email). Read **this
+   deployment's** log (`railway deployment list -s db-admin`, then `railway logs <deployment id>`):
+   straight after a deploy, `railway logs -s db-admin` can still show the previous run.
+4. Apply: `WASSUP_CLINIC_APPLY=true` (and in production `WASSUP_PRODUCTION_ACK=<slug>`), deploy
+   again; the log ends `committed`. The owner signs in again and lands in the clinic.
+5. Clean up: remove the `WASSUP_CLINIC_*` variables and the acknowledgement; `WASSUP_ROLE=report`.
 
-Then add staff: a `staff_users` row keyed by their Firebase uid, plus `clinic_memberships` with a role.
+Running it again with the same slug adds agents, numbers or makes someone an owner; it refuses to
+change the name, state or timezone, and refuses an agent or number that belongs to another
+clinic. A new clinic starts as `onboarding`: calls route to it and its staff can sign in (only
+`suspended` stops both).
 
 ## 4. Point the clinic's voice agent at the new platform (staging first)
 

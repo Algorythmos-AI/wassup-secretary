@@ -18,17 +18,23 @@ was answered with the tool's fallback: the caller was told their message was *no
 ## 1. Fix the mapping first
 Correct `clinic_voice_agents` or `clinic_phone_numbers`, or the agent's configuration, so new calls stop being quarantined. `/health/voice-config` shows which numbers disagree.
 
-## 2. Recover the calls (as the database admin, inside a transaction)
-```sql
--- Webhook events: make them eligible for the replay job (it re-submits them within minutes).
-UPDATE retell_events_raw SET error = 'processing_failed:requeued', replay_attempts = 0
-WHERE error LIKE 'quarantined:%' AND agent_id = '<agent>';
-```
-Tool requests cannot be recovered after the call ends. If a quarantined `capture_message` was urgent, **phone the clinic**. The payload is in `quarantine_events`; read it only for this purpose.
+## 2. Recover the calls
+
+Decisions are runs of the one-shot `db-admin` service with `WASSUP_ROLE=ops` (a dry run until
+`WASSUP_OPS_APPLY=true`; in production also `WASSUP_PRODUCTION_ACK=<action>`; see
+[outbox-dead-letter](outbox-dead-letter.md) for how). `WASSUP_OPS_ACTION=list` shows each
+unresolved record's `id`, `reason`, `agent_id` and time, never its payload.
+
+- **Webhook events:** `WASSUP_OPS_ACTION=requeue-quarantined-webhooks`,
+  `WASSUP_OPS_AGENT=<agent>` makes that agent's quarantined events eligible for the replay job,
+  which re-submits them within minutes (after step 1, so they now resolve).
+- **Tool requests** cannot be recovered after the call ends. If a quarantined `capture_message`
+  was urgent, **phone the clinic**.
 
 ## 3. Record the decision
-```sql
-UPDATE quarantine_events SET resolved_at = now(), resolution = 'replayed'   -- or 'not_ours', 'handled_by_phone'
-WHERE resolved_at IS NULL AND agent_id = '<agent>';
-```
-`/health/quarantine` goes green once nothing is unresolved. Resolved records are deleted by retention after 90 days; unresolved ones never are.
+
+`WASSUP_OPS_ACTION=resolve-quarantine`, `WASSUP_OPS_IDS=<id>[,<id>…]`,
+`WASSUP_OPS_RESOLUTION=replayed` (or `not_ours`, `handled_by_phone`).
+
+`/health/quarantine` goes green once nothing is unresolved. Resolved records are deleted by
+retention after 90 days; unresolved ones never are.

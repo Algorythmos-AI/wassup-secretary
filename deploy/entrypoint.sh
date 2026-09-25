@@ -13,6 +13,9 @@
 #   WASSUP_ROLE=load-classifier-rules | activate-classifier-rules | reclassify
 #                                 a clinic's classification rules (db/classifier_rules.py) and exit
 #   WASSUP_ROLE=backup            one verified encrypted backup now (ops_worker.backup) and exit
+#   WASSUP_ROLE=ops               an operator decision from a runbook (db/ops_actions.py: list,
+#                                 requeue or abandon dead outbox events, resolve quarantine; a dry
+#                                 run unless WASSUP_OPS_APPLY=true) and exit
 #   WASSUP_ROLE=restore           restore an archive into THIS database (db/restore.py; a dry run
 #                                 unless WASSUP_RESTORE_APPLY=true) and exit
 #   WASSUP_MIGRATE_ON_START=true  (serve) apply migrations before starting — for platforms where
@@ -44,6 +47,9 @@ case "${WASSUP_ROLE:-serve}" in
     ;;
   restore)
     exec python db/restore.py
+    ;;
+  ops)
+    exec python db/ops_actions.py
     ;;
   serve)
     if [ "${WASSUP_MIGRATE_ON_START:-false}" = "true" ]; then

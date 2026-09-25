@@ -3,14 +3,15 @@
 FROM python:3.12-slim-bookworm AS build
 ARG SERVICE
 COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /uvx /bin/
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
+# No BuildKit cache mount: Railway's builder only accepts cache mounts with a Railway-specific id,
+# and the final image never carries the cache either way (only /app is copied into it).
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never UV_NO_CACHE=1
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY libs ./libs
 COPY services ./services
 COPY db ./db
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --package "wassup-${SERVICE}"
+RUN uv sync --frozen --no-dev --package "wassup-${SERVICE}"
 
 FROM python:3.12-slim-bookworm AS runtime
 ARG SERVICE

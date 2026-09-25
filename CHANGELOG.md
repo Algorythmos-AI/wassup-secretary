@@ -4,6 +4,10 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
 
 ## [Unreleased]
 
+- Nightly encrypted backups (ops-worker) taken as a new read-only `wassup_backup` role, verified by fetching the stored archive back and checking every table's hash and count; `/health/backup`; `db/restore.py` and the restore drill runbook. Migration `0013`; re-run the db-admin bootstrap first (`WASSUP_PASSWORD_BACKUP`).
+- Patient list import (`db/import_patients.py`), `lookup_patient` per-caller limits with a keyed caller hash, and a `verified` flag compared on one canonical phone form. Migration `0012`.
+- Team management from the dashboard: invitations, enrolment at sign-in, role changes. Migration `0011`.
+
 ## [0.1.0] - 2026-09-25
 
 First release: everything below shipped to `integration` between 24 and 25 September 2026 and ran on staging.

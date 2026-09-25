@@ -10,6 +10,7 @@ typed, printed or stored in the repository:
     WASSUP_PASSWORD_APP_VOICE   password for app_voice
     WASSUP_PASSWORD_APP_CORE    password for app_core
     WASSUP_PASSWORD_APP_OPS     password for app_ops
+    WASSUP_PASSWORD_BACKUP      password for wassup_backup (the backup job's read-only role)
 
 Output is role names and outcomes only. Exit status is non-zero on any failure.
 """
@@ -29,6 +30,7 @@ LOGIN_ROLES = {
     "app_voice": "WASSUP_PASSWORD_APP_VOICE",
     "app_core": "WASSUP_PASSWORD_APP_CORE",
     "app_ops": "WASSUP_PASSWORD_APP_OPS",
+    "wassup_backup": "WASSUP_PASSWORD_BACKUP",
 }
 MIN_PASSWORD_LENGTH = 24
 

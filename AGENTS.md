@@ -13,7 +13,7 @@ It is three Python services, one shared library, a web app and a set of operator
 |---|---|
 | `services/voice-gateway` | The only service the voice provider (Retell) talks to: signed webhooks and tool calls. Small, stateless, highest availability. Classifies analysed calls with the clinic's active rules. |
 | `services/core-api` | Staff and dashboard API (`/v1`): sign-in, clinic membership and team management, calls and workflow, analytics, usage, live events. |
-| `services/ops-worker` | Scheduled and background jobs: outbox delivery and alerts, replay, line checks, telephony and voice-config monitors, usage rollup, retention. (Backups are planned, not built: see the completion plan.) |
+| `services/ops-worker` | Scheduled and background jobs: outbox delivery and alerts, replay, line checks, telephony and voice-config monitors, usage rollup, retention, nightly verified encrypted backups (`docs/runbooks/restore-drill.md`). |
 | `apps/web` | The reception dashboard. Types are generated from `contracts/core-api.openapi.json`; CI fails if they drift. |
 | `libs/wassup_core` | Shared settings, DB access and tenancy, logging, the classification engine (`classify.py`). No hand-copied code between services. |
 | `db/` | Alembic migrations (the only owner of the schema) and the one-shot tools `db-admin` runs: `bootstrap.py`, `seed_synthetic.py`, `report.py`, `import_legacy.py`, `classifier_rules.py`. |

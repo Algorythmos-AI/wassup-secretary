@@ -21,7 +21,9 @@ APP_ROLES = (
     "wassup_resolver",
     "wassup_auditor",
 )
-LOGIN_APP_ROLES = ("app_voice", "app_core", "app_ops", "wassup_migrator")
+LOGIN_APP_ROLES = ("app_voice", "app_core", "app_ops", "wassup_migrator", "wassup_backup")
+# The one role allowed to bypass row-level security: the backup job's, which can only SELECT.
+BACKUP_ROLE = "wassup_backup"
 # The only tables the resolver role may read, and only through FOR SELECT policies.
 RESOLVER_READABLE = {
     "clinics",
@@ -236,14 +238,16 @@ def test_auditor_role_touches_only_the_chain_heads(db_engine: Engine) -> None:
         app_grants = conn.execute(
             text(
                 """
-                SELECT grantee FROM information_schema.role_table_grants
+                SELECT grantee, privilege_type FROM information_schema.role_table_grants
                 WHERE table_name = 'audit_chain_heads' AND grantee <> ALL(:allowed)
                 """
             ),
             {"allowed": ["wassup_auditor", "wassup_owner"]},
         ).all()
     assert {r.table_name for r in rows} == AUDITOR_TABLES
-    assert app_grants == []
+    # The chain heads are backed up (a restore must keep the audit chain verifiable); no app
+    # role touches them.
+    assert {(r.grantee, r.privilege_type) for r in app_grants} == {(BACKUP_ROLE, "SELECT")}
 
 
 def test_definer_functions_are_owned_by_their_reviewed_role(db_engine: Engine) -> None:
@@ -258,3 +262,108 @@ def test_definer_functions_are_owned_by_their_reviewed_role(db_engine: Engine) -
             )
         ).all()
     assert {r.proname: r.owner for r in rows} == DEFINER_ALLOWLIST
+
+
+def test_backup_role_bypasses_rls_but_can_only_read(db_engine: Engine) -> None:
+    """A backup must hold every clinic's rows, so one role bypasses RLS — and that role can do
+    nothing but SELECT: no writes anywhere, no resolver functions, no superuser, no CREATEDB."""
+    with db_engine.connect() as conn:
+        bypassing = (
+            conn.execute(
+                text(
+                    # Every role, whatever its name, except superusers and Postgres's own.
+                    "SELECT rolname FROM pg_roles WHERE rolbypassrls AND NOT rolsuper "
+                    "AND left(rolname, 3) <> 'pg_'"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        attrs = conn.execute(
+            text("SELECT rolsuper, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = :r"),
+            {"r": BACKUP_ROLE},
+        ).one()
+        relations = conn.execute(
+            text(
+                """
+                SELECT c.relname, c.relkind
+                FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S')
+                """
+            )
+        ).all()
+        unreadable, writable = [], []
+        for rel in relations:
+            if rel.relkind == "S":
+                can_read = conn.execute(
+                    text("SELECT has_sequence_privilege(:r, :s, 'SELECT')"),
+                    {"r": BACKUP_ROLE, "s": f'public."{rel.relname}"'},
+                ).scalar()
+                can_write = conn.execute(
+                    text(
+                        "SELECT has_sequence_privilege(:r, :s, 'UPDATE') OR has_sequence_privilege(:r, :s, 'USAGE')"
+                    ),
+                    {"r": BACKUP_ROLE, "s": f'public."{rel.relname}"'},
+                ).scalar()
+            else:
+                can_read = conn.execute(
+                    text("SELECT has_table_privilege(:r, :t, 'SELECT')"),
+                    {"r": BACKUP_ROLE, "t": f'public."{rel.relname}"'},
+                ).scalar()
+                can_write = conn.execute(
+                    text(
+                        "SELECT has_table_privilege(:r, :t, 'INSERT') OR has_table_privilege(:r, :t, 'UPDATE') "
+                        "OR has_table_privilege(:r, :t, 'DELETE') OR has_table_privilege(:r, :t, 'TRUNCATE') "
+                        "OR has_table_privilege(:r, :t, 'REFERENCES') OR has_table_privilege(:r, :t, 'TRIGGER')"
+                    ),
+                    {"r": BACKUP_ROLE, "t": f'public."{rel.relname}"'},
+                ).scalar()
+            (unreadable if not can_read else []).append(rel.relname)
+            (writable if can_write else []).append(rel.relname)
+        definers = (
+            conn.execute(
+                text(
+                    """
+                SELECT p.oid::regprocedure AS sig
+                FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace AND n.nspname = 'public'
+                WHERE p.prosecdef
+                """
+                )
+            )
+            .scalars()
+            .all()
+        )
+        executable = [
+            sig
+            for sig in definers
+            if conn.execute(
+                text("SELECT has_function_privilege(:r, :f, 'EXECUTE')"),
+                {"r": BACKUP_ROLE, "f": str(sig)},
+            ).scalar()
+        ]
+        schema_create = conn.execute(
+            text("SELECT has_schema_privilege(:r, 'public', 'CREATE')"), {"r": BACKUP_ROLE}
+        ).scalar()
+    assert bypassing == [BACKUP_ROLE], f"only the backup role may bypass RLS: {bypassing}"
+    assert tuple(attrs) == (False, False, False)
+    assert unreadable == [], f"backup role can't read: {unreadable}"
+    assert writable == [], f"backup role can write: {writable}"
+    assert executable == [], f"backup role can run definer functions: {executable}"
+    assert not schema_create
+
+
+def test_tables_added_after_the_grant_are_readable_by_the_backup_role(db_engine: Engine) -> None:
+    """Default privileges: a table a future migration creates as the owner is backed up too."""
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(text("SET LOCAL ROLE wassup_owner"))
+        conn.execute(text("CREATE TABLE zz_future_probe (id bigint GENERATED ALWAYS AS IDENTITY)"))
+        readable = conn.execute(
+            text("SELECT has_table_privilege(:r, 'public.zz_future_probe', 'SELECT')"),
+            {"r": BACKUP_ROLE},
+        ).scalar()
+        seq_readable = conn.execute(
+            text("SELECT has_sequence_privilege(:r, 'public.zz_future_probe_id_seq', 'SELECT')"),
+            {"r": BACKUP_ROLE},
+        ).scalar()
+        conn.execute(text("DROP TABLE zz_future_probe"))
+    assert readable and seq_readable

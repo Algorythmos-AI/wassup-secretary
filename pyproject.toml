@@ -19,6 +19,7 @@ dev = [
   "alembic>=1.13",
   "sqlalchemy>=2.0.30",
   "psycopg[binary]>=3.2",
+  "hypothesis>=6.100",
 ]
 
 [tool.ruff]

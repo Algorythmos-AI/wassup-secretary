@@ -41,7 +41,7 @@ export function DaySheet({ calls, timeZone, selectedId, freshIds, onSelect }: Pr
                         <span className="call__time">{call.started_at ? formatTime(call.started_at, timeZone) : "—"}</span>
                         <span className="call__main">
                           <span className="call__title">
-                            {humanizeIntent(call.intent)}
+                            {call.action_label ?? humanizeIntent(call.intent)}
                             {call.has_urgent_message && <span className="call__flag call__flag--urgent">Urgent message</span>}
                             {call.is_priority && <span className="call__flag">Priority</span>}
                           </span>

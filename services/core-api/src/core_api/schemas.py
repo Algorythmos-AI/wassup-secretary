@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 Role = Literal["viewer", "receptionist", "admin", "owner"]
+PriorityLevel = Literal["emergency", "priority_1", "priority_2", "priority_3", "none"]
 WorkflowStatus = Literal["pending", "following_up", "addressed", "no_action_needed"]
 
 
@@ -41,6 +42,10 @@ class CallSummary(BaseModel):
     workflow_status: WorkflowStatus
     is_priority: bool
     is_reception_action: bool
+    priority_level: PriorityLevel | None = Field(
+        description="The clinic's classification tier; null until the call is classified"
+    )
+    action_label: str | None = Field(description="What the caller wanted, in the clinic's words")
     has_urgent_message: bool = Field(
         description="The caller left a message the voice agent flagged as urgent"
     )

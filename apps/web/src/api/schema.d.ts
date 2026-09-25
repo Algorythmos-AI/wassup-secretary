@@ -189,6 +189,11 @@ export interface components {
         };
         /** CallRecord */
         CallRecord: {
+            /**
+             * Action Label
+             * @description What the caller wanted, in the clinic's words
+             */
+            action_label: string | null;
             /** Analyzed At */
             analyzed_at: string | null;
             /**
@@ -232,6 +237,11 @@ export interface components {
             local_date: string | null;
             /** Local Hour */
             local_hour: number | null;
+            /**
+             * Priority Level
+             * @description The clinic's classification tier; null until the call is classified
+             */
+            priority_level: ("emergency" | "priority_1" | "priority_2" | "priority_3" | "none") | null;
             /** Provider Call Id */
             provider_call_id: string;
             /** Sentiment */
@@ -260,6 +270,11 @@ export interface components {
          * @description One row of the call list: enough to triage, without the transcript.
          */
         CallSummary: {
+            /**
+             * Action Label
+             * @description What the caller wanted, in the clinic's words
+             */
+            action_label: string | null;
             /** Duration Seconds */
             duration_seconds: number | null;
             /** From Number */
@@ -280,6 +295,11 @@ export interface components {
             is_priority: boolean;
             /** Is Reception Action */
             is_reception_action: boolean;
+            /**
+             * Priority Level
+             * @description The clinic's classification tier; null until the call is classified
+             */
+            priority_level: ("emergency" | "priority_1" | "priority_2" | "priority_3" | "none") | null;
             /** Started At */
             started_at: string | null;
             /** Summary */

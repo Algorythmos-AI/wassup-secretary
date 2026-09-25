@@ -34,6 +34,7 @@ from wassup_core.logging import get_logger
 
 from voice_gateway import store
 from voice_gateway.retell import ANALYZED_EVENT, KNOWN_EVENTS, PayloadError, parse_event, to_record
+from voice_gateway.rules import classify_record
 from voice_gateway.settings import VoiceGatewaySettings
 from voice_gateway.signature import verify
 
@@ -101,7 +102,8 @@ async def retell_webhook(request: Request) -> Response:  # noqa: PLR0911 — one
     try:
         async with clinic_scope(engine, [clinic_id]) as conn:
             timezone = await store.clinic_timezone(conn, clinic_id)
-            call_uuid = await store.upsert_call(conn, clinic_id, record, timezone)
+            classification = await classify_record(request.app.state.rules, conn, clinic_id, record)
+            call_uuid = await store.upsert_call(conn, clinic_id, record, timezone, classification)
             if event == ANALYZED_EVENT:
                 await store.enqueue(
                     conn,

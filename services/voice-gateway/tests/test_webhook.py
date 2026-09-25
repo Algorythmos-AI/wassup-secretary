@@ -267,3 +267,123 @@ async def test_invalid_json_is_400(client: httpx.AsyncClient) -> None:
         headers={"x-retell-signature": sign(body, KEY, int(time.time() * 1000))},
     )
     assert response.status_code == 400
+
+
+SYNTHETIC_RULES = json.dumps(
+    {
+        "route_levels": {"post_op_message": "priority_2"},
+        "tiers": [{"level": "priority_1", "reason": "Clinical attention", "any": ["swelling"]}],
+        "reception_action": {"summary_any": ["callback"]},
+        "action_labels": [{"label": "Callback Needed", "summary_any": ["callback"]}],
+    }
+)
+
+
+def _rules(db_engine: Engine, clinic: uuid.UUID, rules: str, active: bool = True) -> None:
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(
+            text("UPDATE clinic_classifier_rules SET active = false WHERE clinic_id = :c"),
+            {"c": clinic},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO clinic_classifier_rules (clinic_id, version, rules, active) VALUES "
+                "(:c, (SELECT coalesce(max(version), 0) + 1 FROM clinic_classifier_rules WHERE clinic_id = :c), "
+                "CAST(:r AS jsonb), :a)"
+            ),
+            {"c": clinic, "r": rules, "a": active},
+        )
+
+
+async def test_an_analysed_call_is_classified_with_the_clinics_active_rules(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    _rules(db_engine, seed.clinic_a, SYNTHETIC_RULES)
+    client._transport.app.state.rules.forget()  # type: ignore[attr-defined]
+    call_id = f"call_{uuid.uuid4().hex}"
+    call = _call(call_id)
+    call["call_analysis"]["call_summary"] = (
+        "Synthetic caller reports swelling and wants a callback."
+    )
+    assert (await _post(client, "call_analyzed", call)).status_code == 204
+    [row] = _rows(db_engine, "SELECT * FROM calls WHERE provider_call_id = :c", c=call_id)
+    assert (row["priority_level"], row["is_priority"], row["is_reception_action"]) == (
+        "priority_1",
+        True,
+        True,
+    )
+    assert row["action_label"] == "Callback Needed" and row["classifier_version"] == 1
+    assert row["classified_at"] is not None
+
+    # The agent's own route wins, and the call is re-classified on a later analysed event.
+    call["call_analysis"]["custom_analysis_data"]["triage_route"] = "post_op_message"
+    assert (await _post(client, "call_analyzed", call)).status_code == 204
+    [row] = _rows(
+        db_engine,
+        "SELECT priority_level, priority_reason FROM calls WHERE provider_call_id = :c",
+        c=call_id,
+    )
+    assert (row["priority_level"], row["priority_reason"]) == (
+        "priority_2",
+        "Agent triage: post_op_message",
+    )
+
+
+async def test_without_active_rules_or_with_bad_rules_the_call_is_stored_unclassified(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    cache = client._transport.app.state.rules  # type: ignore[attr-defined]
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(
+            text("UPDATE clinic_classifier_rules SET active = false WHERE clinic_id = :c"),
+            {"c": seed.clinic_a},
+        )
+    cache.forget()
+    call_id = f"call_{uuid.uuid4().hex}"
+    assert (await _post(client, "call_analyzed", _call(call_id))).status_code == 204
+    [row] = _rows(
+        db_engine,
+        "SELECT priority_level, is_priority FROM calls WHERE provider_call_id = :c",
+        c=call_id,
+    )
+    assert (row["priority_level"], row["is_priority"]) == (None, False)
+
+    # A rule set the engine can't read never breaks ingestion (a row is a row; it is never lost).
+    _rules(
+        db_engine,
+        seed.clinic_a,
+        json.dumps({"tiers": [{"level": "critical", "reason": "x", "any": ["a"]}]}),
+    )
+    cache.forget()
+    call_id = f"call_{uuid.uuid4().hex}"
+    assert (await _post(client, "call_analyzed", _call(call_id))).status_code == 204
+    [row] = _rows(
+        db_engine, "SELECT priority_level FROM calls WHERE provider_call_id = :c", c=call_id
+    )
+    assert row["priority_level"] is None
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(
+            text("UPDATE clinic_classifier_rules SET active = false WHERE clinic_id = :c"),
+            {"c": seed.clinic_a},
+        )
+    cache.forget()
+
+
+async def test_rules_of_one_clinic_never_apply_to_another(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    _rules(db_engine, seed.clinic_b, SYNTHETIC_RULES)
+    client._transport.app.state.rules.forget()  # type: ignore[attr-defined]
+    call_id = f"call_{uuid.uuid4().hex}"
+    call = _call(call_id)  # clinic A's agent
+    call["call_analysis"]["call_summary"] = "swelling"
+    assert (await _post(client, "call_analyzed", call)).status_code == 204
+    [row] = _rows(
+        db_engine, "SELECT priority_level FROM calls WHERE provider_call_id = :c", c=call_id
+    )
+    assert row["priority_level"] is None
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(
+            text("UPDATE clinic_classifier_rules SET active = false WHERE clinic_id = :c"),
+            {"c": seed.clinic_b},
+        )

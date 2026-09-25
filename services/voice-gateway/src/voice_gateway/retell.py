@@ -32,6 +32,8 @@ class CallRecord:
     transcript: str | None
     sentiment: str | None
     intent: str | None
+    triage_route: str | None
+    call_successful: bool | None
     analyzed: bool
 
     def local_fields(self, timezone: str) -> tuple[Any, int | None, int | None]:
@@ -100,5 +102,11 @@ def to_record(event: str, call: dict[str, Any]) -> CallRecord:
         transcript=_str(call.get("transcript")),
         sentiment=_str(analysis.get("user_sentiment"), 50) if analyzed else None,
         intent=_str(custom.get("intent"), 100) if analyzed else None,
+        # The agent's own routing decision and the provider's success judgement feed the
+        # classifier; both only mean something once the call is analysed.
+        triage_route=_str(custom.get("triage_route"), 60) if analyzed else None,
+        call_successful=analysis.get("call_successful")
+        if analyzed and isinstance(analysis.get("call_successful"), bool)
+        else None,
         analyzed=analyzed,
     )

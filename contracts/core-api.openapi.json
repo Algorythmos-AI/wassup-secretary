@@ -150,6 +150,18 @@
       },
       "CallRecord": {
         "properties": {
+          "action_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the caller wanted, in the clinic's words",
+            "title": "Action Label"
+          },
           "analyzed_at": {
             "anyOf": [
               {
@@ -280,6 +292,25 @@
             ],
             "title": "Local Hour"
           },
+          "priority_level": {
+            "anyOf": [
+              {
+                "enum": [
+                  "emergency",
+                  "priority_1",
+                  "priority_2",
+                  "priority_3",
+                  "none"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The clinic's classification tier; null until the call is classified",
+            "title": "Priority Level"
+          },
           "provider_call_id": {
             "title": "Provider Call Id",
             "type": "string"
@@ -366,6 +397,8 @@
           "workflow_status",
           "is_priority",
           "is_reception_action",
+          "priority_level",
+          "action_label",
           "has_urgent_message",
           "version",
           "provider_call_id",
@@ -386,6 +419,18 @@
       "CallSummary": {
         "description": "One row of the call list: enough to triage, without the transcript.",
         "properties": {
+          "action_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the caller wanted, in the clinic's words",
+            "title": "Action Label"
+          },
           "duration_seconds": {
             "anyOf": [
               {
@@ -437,6 +482,25 @@
             "title": "Is Reception Action",
             "type": "boolean"
           },
+          "priority_level": {
+            "anyOf": [
+              {
+                "enum": [
+                  "emergency",
+                  "priority_1",
+                  "priority_2",
+                  "priority_3",
+                  "none"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The clinic's classification tier; null until the call is classified",
+            "title": "Priority Level"
+          },
           "started_at": {
             "anyOf": [
               {
@@ -485,6 +549,8 @@
           "workflow_status",
           "is_priority",
           "is_reception_action",
+          "priority_level",
+          "action_label",
           "has_urgent_message",
           "version"
         ],

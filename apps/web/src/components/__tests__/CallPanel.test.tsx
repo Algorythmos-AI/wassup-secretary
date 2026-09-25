@@ -24,6 +24,8 @@ function detail(overrides: Partial<CallDetail["call"]> = {}): CallDetail {
       workflow_status: "pending",
       is_priority: false,
       is_reception_action: true,
+      priority_level: null,
+      action_label: null,
       has_urgent_message: true,
       version: 4,
       cost_usd: "0.12",

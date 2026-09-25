@@ -11,6 +11,8 @@ const call = (id: string, started_at: string | null): CallSummary => ({
   workflow_status: "pending",
   is_priority: false,
   is_reception_action: false,
+  priority_level: null,
+  action_label: null,
   has_urgent_message: false,
   version: 1,
 });

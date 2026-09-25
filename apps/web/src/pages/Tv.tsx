@@ -163,7 +163,7 @@ export function Tv() {
                   <li key={c.id} className={OPEN_STATUSES.has(c.workflow_status) ? "tv__call tv__call--open" : "tv__call"}>
                     <span className="tv__time">{formatTime(c.started_at!, timeZone)}</span>
                     <span className="tv__what">
-                      {humanizeIntent(c.intent)}
+                      {c.action_label ?? humanizeIntent(c.intent)}
                       {c.has_urgent_message && <span className="tv__flag">Urgent</span>}
                       {c.is_priority && !c.has_urgent_message && <span className="tv__flag">Priority</span>}
                     </span>
@@ -182,7 +182,7 @@ export function Tv() {
             {waiting.slice(0, 12).map((c) => (
               <li key={c.id} className={c.is_priority || c.has_urgent_message ? "tv__wait tv__wait--priority" : "tv__wait"}>
                 <span className="tv__waited">{waited(c.started_at!, now)}</span>
-                <span className="tv__what">{humanizeIntent(c.intent)}</span>
+                <span className="tv__what">{c.action_label ?? humanizeIntent(c.intent)}</span>
                 <span className="tv__caller">{maskPhone(c.from_number)}</span>
               </li>
             ))}

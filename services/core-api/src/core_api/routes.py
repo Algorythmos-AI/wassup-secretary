@@ -104,7 +104,7 @@ async def me(staff: StaffDep, request: Request) -> dict[str, Any]:
 # the partial index from migration 0009; written out in each statement to keep them literal.)
 _LIST_SELECT = (
     "SELECT id, started_at, from_number, duration_seconds, summary, intent, workflow_status, "
-    "is_priority, is_reception_action, version, "
+    "is_priority, is_reception_action, priority_level, action_label, version, "
     "EXISTS (SELECT 1 FROM messages m WHERE m.clinic_id = calls.clinic_id "
     "AND m.provider_call_id = calls.provider_call_id AND m.urgent) AS has_urgent_message "
     "FROM calls WHERE clinic_id = :c "
@@ -187,8 +187,8 @@ _DETAIL = text(
     """
     SELECT id, provider_call_id, direction, from_number, to_number, started_at, ended_at,
            duration_seconds, cost_usd::text AS cost_usd, disconnection_reason, summary, transcript,
-           sentiment, intent, is_priority, is_reception_action, local_date, local_hour,
-           workflow_status, version, analyzed_at,
+           sentiment, intent, is_priority, is_reception_action, priority_level, action_label,
+           local_date, local_hour, workflow_status, version, analyzed_at,
            EXISTS (SELECT 1 FROM messages m WHERE m.clinic_id = calls.clinic_id
                    AND m.provider_call_id = calls.provider_call_id AND m.urgent)
              AS has_urgent_message

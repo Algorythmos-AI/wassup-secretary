@@ -369,17 +369,25 @@ async def test_concurrent_demotions_cannot_remove_the_last_owner(
         )
 
 
-async def test_emails_with_unusual_case_still_match(client: httpx.AsyncClient, seed: Seed) -> None:
+async def test_emails_match_case_insensitively_without_python_lowercasing(
+    client: httpx.AsyncClient, seed: Seed
+) -> None:
     url = f"/v1/clinics/{seed.clinic_b}/team/invitations"
-    assert (
-        await client.post(
-            url,
-            json={"email": "Über.Person@Example.TEST", "role": "viewer"},
-            headers=_auth(ADMIN_B),
-        )
-    ).status_code == 201
-    me = await client.get("/v1/me", headers=_auth("test:uid-uber:über.person@example.test"))
+    created = await client.post(
+        url, json={"email": "Mixed.Case@Example.TEST", "role": "viewer"}, headers=_auth(ADMIN_B)
+    )
+    assert created.status_code == 201
+    # Stored as typed (citext decides equality), so what the admin typed is what they see.
+    assert any(
+        i["email"] == "Mixed.Case@Example.TEST" for i in created.json()["team"]["invitations"]
+    )
+    me = await client.get("/v1/me", headers=_auth("test:uid-mixed:mixed.case@example.test"))
     assert me.status_code == 200 and [c["id"] for c in me.json()["clinics"]] == [str(seed.clinic_b)]
+    # A second invitation for the same person, differently cased, is refused: already a member.
+    again = await client.post(
+        url, json={"email": "MIXED.CASE@example.test", "role": "admin"}, headers=_auth(ADMIN_B)
+    )
+    assert again.status_code == 409
 
 
 async def test_another_clinics_admin_cannot_manage_this_team(

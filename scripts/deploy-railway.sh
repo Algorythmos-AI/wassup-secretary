@@ -22,6 +22,21 @@ fi
 sha="$(git rev-parse HEAD)"
 tree="$(git rev-parse 'HEAD^{tree}')"
 
+# Production only ever runs a release: an exact v* tag whose commit is on origin/main. Anything
+# else (a feature branch, integration, an untagged fix) is refused here, before any upload.
+if [ "$env" = "production" ]; then
+  tag="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+  case "$tag" in
+    v[0-9]*) ;;
+    *) echo "production deploys need HEAD to be an exact v* tag (got '${tag:-none}'): cut a release first" >&2; exit 2 ;;
+  esac
+  git fetch -q origin main
+  if ! git merge-base --is-ancestor "$sha" origin/main; then
+    echo "production deploys must come from main: $tag ($sha) is not on origin/main" >&2; exit 2
+  fi
+  grep -q "^## \[${tag#v}\]" CHANGELOG.md || { echo "CHANGELOG.md has no '## [${tag#v}]' section" >&2; exit 2; }
+fi
+
 for service in "$@"; do
   config="deploy/railway/${service}.json"
   [ -f "$config" ] || { echo "missing $config" >&2; exit 2; }

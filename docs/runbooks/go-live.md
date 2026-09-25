@@ -49,6 +49,9 @@ On services that weren't created from a connected repository, Railway ignores co
 - `WASSUP_MIGRATE_ON_START=true`, set on ops-worker, applies migrations before serving.
 
 ## 1c. Deploying exact commits
+
+Production is deployed only by release (`docs/runbooks/release.md`): a `v*` tag on `main`, green CI, a CHANGELOG entry, fixed service order, `/health` tree verified. Creating the `production` environment by duplicating staging is described there too.
+
 Run `scripts/deploy-railway.sh <environment> db-admin ops-worker voice-gateway core-api` from a clean checkout of the branch you're deploying.
 
 For each service, the script:

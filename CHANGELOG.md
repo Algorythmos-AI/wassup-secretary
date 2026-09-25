@@ -3,6 +3,17 @@
 All notable changes are recorded here. Versions follow SemVer. One version covers the whole monorepo.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-09-25
+
+First release: everything below shipped to `integration` between 24 and 25 September 2026 and ran on staging.
+
+- Reception dashboard `apps/web` (React + TypeScript, typed from the committed OpenAPI contract): Firebase sign-in, inbox laid out as a day sheet with live updates, call panel with status changes (If-Match + Idempotency-Key), analytics, usage (admins), office TV board, Australian number formatting. Served by Caddy with CSP/HSTS, no source maps, a real 404 for missing assets, and `/version.json` so screens reload themselves after a deploy. A build with missing or wrong settings shows a page naming them.
+- Messages keep their urgency at rest (`messages.urgent`, migration `0009`, backfilled from alert events); the call list and detail carry `has_urgent_message`; `open_only` and `order=oldest` on the call list; voice cost is withheld server-side below admin.
+- Legacy history import `db/import_legacy.py` (one clinic per run, dry run by default, one verified transaction, idempotent, counts-only output; a production apply needs a per-clinic acknowledgement) with runbook `legacy-import.md`.
+- Independent review of the dashboard and live events: 13 defects fixed with regression tests (stale call-panel responses, closed calls stuck in To do, missed events on reconnect, refresh coalescing, backoff and idle watchdog, session retry, TV revocation and ordering).
+- Deploy on Railway without config-as-code: env-driven `deploy/entrypoint.sh` (`WASSUP_ROLE` serve / bootstrap / seed-synthetic / report / import-legacy), one-shot `db-admin` role bootstrap with platform-generated passwords, exact-commit deploys via `scripts/deploy-railway.sh`.
+- Release path: production deploys only from a `v*` tag on `main` with green CI and a CHANGELOG entry, in a fixed service order, verified by `/health` tree; rollback is the previous tag.
 - Repository bootstrap: licence, notice, agent rules, security policy.
 - uv workspace: `wassup_core` (settings, allowlist log redaction, RFC 9457 errors, per-route body limits, app factory) and three service skeletons with `/health`; CI (lint, types, tests with Postgres, image build + smoke, `ci-gate`), security scans, PR-title check.
 - Database foundation: role model (`db/roles.sql`), Alembic migration `0001` with every tenant table under ENABLE + FORCE row-level security, three narrowly granted SECURITY DEFINER resolvers owned by a read-only `wassup_resolver` role, least-privilege grants per service, append-only audit log; 36 tenancy tests run as the real app roles against Postgres in CI.

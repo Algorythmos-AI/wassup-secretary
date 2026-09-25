@@ -361,3 +361,29 @@ def test_verification_catches_a_row_that_differs_from_the_source(
     assert counts["verify failed, calls: intent differs"] == 1
     assert counts["verify failed, messages: urgent differs"] == 1
     assert _rows(target, "SELECT count(*) AS n FROM calls")[0]["n"] == 0
+
+
+def test_production_apply_needs_a_per_clinic_acknowledgement(
+    legacy: Engine,
+    target: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _add_call(legacy, "call_a")
+    monkeypatch.setenv("WASSUP_LEGACY_DATABASE_URL", _url(legacy))
+    monkeypatch.setenv("WASSUP_ADMIN_DATABASE_URL", _url(target))
+    monkeypatch.setenv("WASSUP_IMPORT_CLINIC", "legacy-clinic")
+    monkeypatch.setenv("WASSUP_IMPORT_AGENTS", AGENT)
+    monkeypatch.setenv("WASSUP_IMPORT_APPLY", "true")
+    monkeypatch.delenv("WASSUP_ENVIRONMENT", raising=False)  # unset counts as production
+    assert importer.main() == 2
+    assert "WASSUP_PRODUCTION_ACK" in capsys.readouterr().err
+    assert _rows(target, "SELECT count(*) AS n FROM calls")[0]["n"] == 0
+
+    monkeypatch.setenv("WASSUP_PRODUCTION_ACK", "some-other-clinic")  # a stale flag is not consent
+    assert importer.main() == 2
+    assert _rows(target, "SELECT count(*) AS n FROM calls")[0]["n"] == 0
+
+    monkeypatch.setenv("WASSUP_PRODUCTION_ACK", "legacy-clinic")
+    assert importer.main() == 0
+    assert _rows(target, "SELECT count(*) AS n FROM calls")[0]["n"] == 1

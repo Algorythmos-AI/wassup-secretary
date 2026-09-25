@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -241,6 +242,144 @@ async def test_role_changes_and_removal_keep_an_owner_and_respect_rank(
         c=seed.clinic_a,
     )
     assert audit[0]["n"] >= 6
+
+
+async def test_a_stranger_leaves_no_trace_and_a_revoked_invitation_grants_nothing(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    stranger = "test:uid-stranger-9:stranger9@example.test"
+    assert (await client.get("/v1/me", headers=_auth(stranger))).status_code == 403
+    assert _rows(db_engine, "SELECT 1 FROM staff_users WHERE firebase_uid = 'uid-stranger-9'") == []
+
+    # Invite, revoke, then the person signs in: nothing is granted, nothing is stored.
+    url = f"/v1/clinics/{seed.clinic_a}/team/invitations"
+    created = await client.post(
+        url, json={"email": "revoked@example.test", "role": "viewer"}, headers=_auth(ADMIN_A)
+    )
+    invitation = next(
+        i for i in created.json()["team"]["invitations"] if i["email"] == "revoked@example.test"
+    )
+    assert (
+        await client.delete(f"{url}/{invitation['id']}", headers=_auth(ADMIN_A))
+    ).status_code == 200
+    assert (
+        await client.get("/v1/me", headers=_auth("test:uid-revoked:revoked@example.test"))
+    ).status_code == 403
+    assert _rows(db_engine, "SELECT 1 FROM staff_users WHERE firebase_uid = 'uid-revoked'") == []
+
+
+async def test_an_invitation_lapses_when_the_inviter_lost_the_rank_to_vouch_for_it(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    # An owner invites an admin, then is demoted to viewer by another owner.
+    members = f"/v1/clinics/{seed.clinic_a}/team/members"
+    team = await _team(client, seed.clinic_a, OWNER_A)
+    by_email = {m["email"]: m["staff_user_id"] for m in team["members"]}
+    assert (
+        await client.patch(
+            f"{members}/{by_email['admin@a.example.test']}",
+            json={"role": "owner"},
+            headers=_auth(OWNER_A),
+        )
+    ).status_code == 200
+    created = await client.post(
+        f"/v1/clinics/{seed.clinic_a}/team/invitations",
+        json={"email": "vouched@example.test", "role": "admin"},
+        headers=_auth(OWNER_A),
+    )
+    assert created.status_code == 201
+    assert (
+        await client.patch(
+            f"{members}/{by_email['owner@a.example.test']}",
+            json={"role": "viewer"},
+            headers=_auth(ADMIN_A),
+        )
+    ).status_code == 200
+    try:
+        me = await client.get("/v1/me", headers=_auth("test:uid-vouched:vouched@example.test"))
+        assert me.status_code == 403  # the invitation lapsed instead of granting admin
+        [row] = _rows(
+            db_engine,
+            "SELECT revoked_at FROM clinic_invitations WHERE email = 'vouched@example.test'",
+        )
+        assert row["revoked_at"] is not None
+        assert _rows(db_engine, "SELECT 1 FROM audit_log WHERE action = 'invitation.lapsed'")
+    finally:  # restore the fixture
+        assert (
+            await client.patch(
+                f"{members}/{by_email['owner@a.example.test']}",
+                json={"role": "owner"},
+                headers=_auth(ADMIN_A),
+            )
+        ).status_code == 200
+        assert (
+            await client.patch(
+                f"{members}/{by_email['admin@a.example.test']}",
+                json={"role": "admin"},
+                headers=_auth(OWNER_A),
+            )
+        ).status_code == 200
+
+
+async def test_nobody_changes_their_own_access(client: httpx.AsyncClient, seed: Seed) -> None:
+    team = await _team(client, seed.clinic_a, ADMIN_A)
+    me = next(m["staff_user_id"] for m in team["members"] if m["email"] == "admin@a.example.test")
+    members = f"/v1/clinics/{seed.clinic_a}/team/members"
+    assert (
+        await client.patch(f"{members}/{me}", json={"role": "viewer"}, headers=_auth(ADMIN_A))
+    ).status_code == 409
+    assert (await client.delete(f"{members}/{me}", headers=_auth(ADMIN_A))).status_code == 409
+
+
+async def test_concurrent_demotions_cannot_remove_the_last_owner(
+    client: httpx.AsyncClient, db_engine: Engine, seed: Seed
+) -> None:
+    members = f"/v1/clinics/{seed.clinic_a}/team/members"
+    team = await _team(client, seed.clinic_a, OWNER_A)
+    by_email = {m["email"]: m["staff_user_id"] for m in team["members"]}
+    owner, admin = by_email["owner@a.example.test"], by_email["admin@a.example.test"]
+    assert (
+        await client.patch(f"{members}/{admin}", json={"role": "owner"}, headers=_auth(OWNER_A))
+    ).status_code == 200
+    # Two owners demote each other at the same moment: exactly one may succeed.
+    results = await asyncio.gather(
+        client.patch(f"{members}/{admin}", json={"role": "admin"}, headers=_auth(OWNER_A)),
+        client.patch(f"{members}/{owner}", json={"role": "admin"}, headers=_auth(ADMIN_A)),
+    )
+    assert sorted(r.status_code for r in results) == [200, 409]
+    [count] = _rows(
+        db_engine,
+        "SELECT count(*) AS n FROM clinic_memberships WHERE clinic_id = :c AND role = 'owner'",
+        c=seed.clinic_a,
+    )
+    assert count["n"] == 1
+    # Restore the fixture whichever way the race went.
+    with db_engine.connect() as conn, conn.begin():
+        conn.execute(
+            text(
+                "UPDATE clinic_memberships SET role = 'owner' WHERE clinic_id = :c AND staff_user_id = :s"
+            ),
+            {"c": seed.clinic_a, "s": owner},
+        )
+        conn.execute(
+            text(
+                "UPDATE clinic_memberships SET role = 'admin' WHERE clinic_id = :c AND staff_user_id = :s"
+            ),
+            {"c": seed.clinic_a, "s": admin},
+        )
+
+
+async def test_emails_with_unusual_case_still_match(client: httpx.AsyncClient, seed: Seed) -> None:
+    url = f"/v1/clinics/{seed.clinic_b}/team/invitations"
+    assert (
+        await client.post(
+            url,
+            json={"email": "Über.Person@Example.TEST", "role": "viewer"},
+            headers=_auth(ADMIN_B),
+        )
+    ).status_code == 201
+    me = await client.get("/v1/me", headers=_auth("test:uid-uber:über.person@example.test"))
+    assert me.status_code == 200 and [c["id"] for c in me.json()["clinics"]] == [str(seed.clinic_b)]
 
 
 async def test_another_clinics_admin_cannot_manage_this_team(

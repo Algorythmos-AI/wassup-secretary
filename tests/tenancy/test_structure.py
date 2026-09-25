@@ -204,6 +204,25 @@ def test_resolver_role_cannot_read_call_data(db_engine: Engine) -> None:
     assert {r.table_name for r in rows} <= RESOLVER_READABLE | {"staff_users"}
 
 
+def test_resolver_role_writes_only_the_staff_row(db_engine: Engine) -> None:
+    """The resolver reads routing tables; its only write is creating or refreshing a staff row
+    for a verified sign-in (0011). Anything wider would let a definer function hand out access."""
+    with db_engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT table_name, privilege_type FROM information_schema.role_table_grants
+                WHERE grantee = 'wassup_resolver' AND table_schema = 'public'
+                  AND privilege_type <> 'SELECT'
+                """
+            )
+        ).all()
+    assert {(r.table_name, r.privilege_type) for r in rows} <= {
+        ("staff_users", "INSERT"),
+        ("staff_users", "UPDATE"),
+    }
+
+
 def test_auditor_role_touches_only_the_chain_heads(db_engine: Engine) -> None:
     with db_engine.connect() as conn:
         rows = conn.execute(

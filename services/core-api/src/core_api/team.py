@@ -89,7 +89,16 @@ def _check_can_grant(staff: Staff, clinic_id: uuid.UUID, role: str) -> None:
 async def _check_can_change(
     conn: AsyncConnection, staff: Staff, clinic_id: uuid.UUID, target: uuid.UUID
 ) -> str:
-    """The target's current role, after checking the actor outranks or equals it."""
+    """The target's current role, after checking the actor outranks or equals it. Changes to a
+    clinic's memberships are serialised per clinic first, so the owner count below is exact."""
+    if target == staff.staff_user_id:
+        raise HTTPException(
+            status_code=409, detail="You can't change your own access; ask another admin"
+        )
+    await conn.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext('team:' || CAST(:c AS text)))"),
+        {"c": str(clinic_id)},
+    )
     current = (await conn.execute(_ROLE_OF, {"c": clinic_id, "s": target})).scalar()
     if current is None:
         raise HTTPException(status_code=404, detail="Not a member")
@@ -110,10 +119,52 @@ async def _check_keeps_an_owner(
 # --- enrolment ----------------------------------------------------------------------------------
 
 
+_ACCEPT = text(
+    """
+    WITH inviter AS (
+      SELECT i.id AS invitation_id, i.clinic_id, i.role, m.role AS inviter_role
+      FROM clinic_invitations i
+      LEFT JOIN clinic_memberships m
+        ON m.clinic_id = i.clinic_id AND m.staff_user_id = i.invited_by
+      WHERE i.id = :id AND i.accepted_at IS NULL AND i.revoked_at IS NULL
+    ),
+    accepted AS (
+      UPDATE clinic_invitations SET accepted_at = now(), accepted_by = :s
+      WHERE id = (SELECT invitation_id FROM inviter
+                  WHERE CASE inviter_role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2
+                                          WHEN 'receptionist' THEN 1 WHEN 'viewer' THEN 0 END
+                        >= CASE role WHEN 'owner' THEN 3 WHEN 'admin' THEN 2
+                                     WHEN 'receptionist' THEN 1 WHEN 'viewer' THEN 0 END)
+      RETURNING clinic_id, role
+    ),
+    membership AS (
+      INSERT INTO clinic_memberships (clinic_id, staff_user_id, role)
+      SELECT clinic_id, :s, role FROM accepted
+      ON CONFLICT (clinic_id, staff_user_id) DO NOTHING
+    )
+    SELECT role FROM accepted
+    """
+)
+_LAPSE = text(
+    "UPDATE clinic_invitations SET revoked_at = now() "
+    "WHERE id = :id AND accepted_at IS NULL AND revoked_at IS NULL"
+)
+
+
 async def enrol(engine: AsyncEngine, principal: Principal) -> int:
-    """Create or refresh the staff row for a verified sign-in, then accept any open invitations
-    for that email: each becomes a membership created under the invited clinic's own scope.
-    Returns how many invitations were accepted."""
+    """Accept any open invitations for a verified sign-in's email. Only then is a staff row
+    created (a stranger who signs in leaves nothing behind). Each acceptance is one statement:
+    the invitation is closed and the membership created together, so an invitation revoked a
+    moment earlier grants nothing. An invitation whose inviter no longer holds a rank at or
+    above the invited role lapses instead. Returns how many memberships were created."""
+    async with unscoped(engine) as conn:
+        invited = (
+            (await conn.execute(text("SELECT * FROM invited_clinics(:e)"), {"e": principal.email}))
+            .mappings()
+            .all()
+        )
+    if not invited:
+        return 0
     async with unscoped(engine) as conn:
         staff_user_id = (
             await conn.execute(
@@ -121,29 +172,27 @@ async def enrol(engine: AsyncEngine, principal: Principal) -> int:
                 {"uid": principal.uid, "email": principal.email},
             )
         ).scalar_one()
-        invited = (
-            (await conn.execute(text("SELECT * FROM invited_clinics(:e)"), {"e": principal.email}))
-            .mappings()
-            .all()
-        )
     accepted = 0
     for invitation in invited:
         clinic_id = uuid.UUID(str(invitation["clinic_id"]))
+        invitation_id = invitation["invitation_id"]
         async with clinic_scope(engine, [clinic_id]) as conn:
-            await conn.execute(
-                text(
-                    "INSERT INTO clinic_memberships (clinic_id, staff_user_id, role) "
-                    "VALUES (:c, :s, :r) ON CONFLICT (clinic_id, staff_user_id) DO NOTHING"
-                ),
-                {"c": clinic_id, "s": staff_user_id, "r": invitation["role"]},
-            )
-            await conn.execute(
-                text(
-                    "UPDATE clinic_invitations SET accepted_at = now(), accepted_by = :s "
-                    "WHERE id = :id AND accepted_at IS NULL AND revoked_at IS NULL"
-                ),
-                {"s": staff_user_id, "id": invitation["invitation_id"]},
-            )
+            role = (await conn.execute(_ACCEPT, {"id": invitation_id, "s": staff_user_id})).scalar()
+            if role is None:
+                # Revoked meanwhile, already accepted, or the inviter can no longer vouch for
+                # that role: it lapses, visibly, rather than granting anything.
+                lapsed = (await conn.execute(_LAPSE, {"id": invitation_id})).rowcount
+                if lapsed:
+                    await _audit(
+                        conn,
+                        clinic_id,
+                        staff_user_id,
+                        "invitation.lapsed",
+                        target_type="invitation",
+                        target_id=str(invitation_id),
+                        detail={"reason": "inviter_rank"},
+                    )
+                continue
             await _audit(
                 conn,
                 clinic_id,
@@ -151,10 +200,7 @@ async def enrol(engine: AsyncEngine, principal: Principal) -> int:
                 "membership.accepted",
                 target_type="membership",
                 target_id=str(staff_user_id),
-                detail={
-                    "role": invitation["role"],
-                    "invitation_id": str(invitation["invitation_id"]),
-                },
+                detail={"role": role, "invitation_id": str(invitation_id)},
             )
         accepted += 1
     if accepted:
@@ -178,10 +224,13 @@ async def invite(
 ) -> dict[str, Any]:
     staff.require(clinic_id, "admin")
     _check_can_grant(staff, clinic_id, body.role)
-    email = body.email.strip().lower()
+    email = body.email.strip()  # case is the database's business (citext), never Python's
     async with clinic_scope(_engine(request), [clinic_id]) as conn:
-        already = [m for m in await _members(conn, clinic_id) if m["email"].lower() == email]
-        if already:
+        member = await conn.execute(
+            text("SELECT 1 FROM clinic_members(:c) WHERE email::citext = CAST(:e AS citext)"),
+            {"c": clinic_id, "e": email},
+        )
+        if member.first() is not None:
             raise HTTPException(status_code=409, detail="Already a member of this clinic")
         try:
             invitation_id = (
@@ -205,10 +254,6 @@ async def invite(
             detail={"role": body.role},
         )
         return {"action": "invited", "team": await _team(conn, clinic_id)}
-
-
-async def _members(conn: AsyncConnection, clinic_id: uuid.UUID) -> list[dict[str, Any]]:
-    return [dict(m) for m in (await conn.execute(_MEMBERS, {"c": clinic_id})).mappings().all()]
 
 
 @router.delete("/clinics/{clinic_id}/team/invitations/{invitation_id}", response_model=TeamChange)

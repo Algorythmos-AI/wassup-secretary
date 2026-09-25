@@ -91,6 +91,8 @@ Railway service settings:
 
 ## 3. Onboard a clinic (data rows, as the owner role, in one transaction)
 
+Only the clinic, its agent, its number and its **first owner** are created by hand. Everyone else is invited from the dashboard's Team page (`docs/runbooks/team.md`).
+
 ```sql
 SET ROLE wassup_owner;
 SELECT set_config('app.clinic_ids', '{<new-clinic-uuid>}', true);

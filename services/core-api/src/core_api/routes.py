@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from wassup_core.db import clinic_scope
 
+from core_api.auth import Principal
 from core_api.schemas import CallDetail, CallPage, Me, WorkflowResult
 from core_api.staff import Staff, current_staff
 
@@ -88,6 +89,10 @@ async def _audit(
 
 @router.get("/me", response_model=Me)
 async def me(staff: StaffDep, request: Request) -> dict[str, Any]:
+    from core_api.team import enrol  # noqa: PLC0415 — team imports this module's dependencies
+
+    if await enrol(_engine(request), Principal(staff.uid, staff.email, staff.expires_at)):
+        staff = await current_staff(request)  # memberships changed: read them again
     async with clinic_scope(_engine(request), list(staff.roles)) as conn:
         clinics = (
             (await conn.execute(text("SELECT id, slug, name, timezone FROM clinics ORDER BY name")))

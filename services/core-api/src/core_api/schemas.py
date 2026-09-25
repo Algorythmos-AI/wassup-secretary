@@ -167,3 +167,43 @@ class UsageTotals(BaseModel):
 class UsageReport(_Dated):
     days: list[UsageDay]
     totals: UsageTotals
+
+
+class Member(BaseModel):
+    staff_user_id: uuid.UUID
+    email: str
+    display_name: str | None
+    role: Role
+    since: datetime
+
+
+class Invitation(BaseModel):
+    id: uuid.UUID
+    email: str
+    role: Role
+    created_at: datetime
+
+
+class Team(BaseModel):
+    members: list[Member]
+    invitations: list[Invitation] = Field(description="Open invitations (not yet accepted)")
+
+
+class InviteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    role: Role
+
+
+class RoleChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Role
+
+
+class TeamChange(BaseModel):
+    """What happened, so the screen can update without a reload."""
+
+    action: Literal["invited", "role_changed", "removed", "invitation_revoked"]
+    team: Team

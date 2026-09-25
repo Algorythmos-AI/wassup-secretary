@@ -12,3 +12,7 @@ export type WorkflowStatus = CallSummary["workflow_status"];
 export type WorkflowResult = S["WorkflowResult"];
 export type AnalyticsSummary = S["AnalyticsSummary"];
 export type UsageReport = S["UsageReport"];
+export type Team = S["Team"];
+export type TeamChange = S["TeamChange"];
+export type Member = S["Member"];
+export type Invitation = S["Invitation"];

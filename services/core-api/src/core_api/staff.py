@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -38,6 +39,15 @@ class Staff:
         return role is not None and ROLE_RANK[role] >= ROLE_RANK[min_role]
 
 
+async def _memberships(engine: AsyncEngine, uid: str) -> list[Any]:
+    async with unscoped(engine) as conn:
+        return list(
+            (await conn.execute(text("SELECT * FROM staff_memberships(:uid)"), {"uid": uid}))
+            .mappings()
+            .all()
+        )
+
+
 async def current_staff(request: Request) -> Staff:
     verifier: TokenVerifier | None = request.app.state.verifier
     engine: AsyncEngine = request.app.state.engine
@@ -51,16 +61,13 @@ async def current_staff(request: Request) -> Staff:
         principal = await run_in_threadpool(verifier.verify, token)
     except AuthError as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired sign-in") from exc
-    async with unscoped(engine) as conn:
-        rows = (
-            (
-                await conn.execute(
-                    text("SELECT * FROM staff_memberships(:uid)"), {"uid": principal.uid}
-                )
-            )
-            .mappings()
-            .all()
-        )
+    rows = await _memberships(engine, principal.uid)
+    if not rows:
+        # A newcomer: accept any invitations for this verified email, then look again.
+        from core_api.team import enrol  # noqa: PLC0415 — team imports Staff; avoid a cycle
+
+        if await enrol(engine, principal):
+            rows = await _memberships(engine, principal.uid)
     if not rows:
         raise HTTPException(status_code=403, detail="No clinic access")
     return Staff(

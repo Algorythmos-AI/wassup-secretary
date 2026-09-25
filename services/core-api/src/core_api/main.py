@@ -17,10 +17,11 @@ from core_api.auth import TokenVerifier, build_verifier
 from core_api.events import router as events_router
 from core_api.routes import router
 from core_api.settings import CoreApiSettings
+from core_api.team import router as team_router
 
-# The newest schema object this service's code relies on (migration 0010). Bump it together with
+# The newest schema object this service's code relies on (migration 0011). Bump it together with
 # the migration that adds something core-api needs: /health stays 503 until it exists.
-SCHEMA_PROBE = "SELECT has_column_privilege('calls', 'priority_level', 'SELECT')"
+SCHEMA_PROBE = "SELECT has_function_privilege('clinic_members(uuid)', 'EXECUTE')"
 
 
 def build_app(
@@ -31,7 +32,7 @@ def build_app(
     settings = settings or CoreApiSettings()
     app = create_app(
         settings,
-        [router, analytics_router, events_router],
+        [router, analytics_router, events_router, team_router],
         readiness=schema_readiness(SCHEMA_PROBE),
     )
     app.state.engine = engine
@@ -43,7 +44,7 @@ def build_app(
         app.add_middleware(
             CORSMiddleware,
             allow_origins=settings.allowed_origins,
-            allow_methods=["GET", "POST"],
+            allow_methods=["GET", "POST", "PATCH", "DELETE"],
             allow_headers=[
                 "Authorization",
                 "Content-Type",

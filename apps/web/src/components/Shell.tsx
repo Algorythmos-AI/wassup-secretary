@@ -40,6 +40,7 @@ export function Shell() {
           <NavLink to={`/c/${current.id}/inbox`}>Inbox</NavLink>
           <NavLink to={`/c/${current.id}/analytics`}>Analytics</NavLink>
           {canSeeUsage(current.role) && <NavLink to={`/c/${current.id}/usage`}>Usage</NavLink>}
+          {canSeeUsage(current.role) && <NavLink to={`/c/${current.id}/team`}>Team</NavLink>}
           <a href={`/c/${current.id}/tv`} target="_blank" rel="noopener">
             Office TV
           </a>

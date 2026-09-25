@@ -1,0 +1,97 @@
+.team {
+  max-width: 900px;
+}
+.team__lede,
+.team__quiet,
+.team__help {
+  color: var(--ink-soft);
+}
+.team__invite {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  align-items: end;
+  padding: 16px;
+  margin: 16px 0 24px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+.team__invite label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.team__invite input,
+.team__invite select,
+.team__table select {
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font: inherit;
+}
+.team__invite .team__help {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 13px;
+}
+.team h2 {
+  margin: 24px 0 8px;
+  font-size: 16px;
+}
+.team__table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+.team__table th,
+.team__table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+}
+.team__table th {
+  font-weight: 600;
+  background: var(--gutter);
+}
+.team__email {
+  font-family: var(--font-cond);
+}
+.team__you {
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--gutter);
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+.team__invitations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.team__invitations li {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.button--quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-soft);
+}
+.button--quiet:hover {
+  color: var(--red);
+}
+@media (max-width: 640px) {
+  .team__invite {
+    grid-template-columns: 1fr;
+  }
+}

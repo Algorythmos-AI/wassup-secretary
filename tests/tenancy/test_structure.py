@@ -23,13 +23,23 @@ APP_ROLES = (
 )
 LOGIN_APP_ROLES = ("app_voice", "app_core", "app_ops", "wassup_migrator")
 # The only tables the resolver role may read, and only through FOR SELECT policies.
-RESOLVER_READABLE = {"clinics", "clinic_voice_agents", "clinic_phone_numbers", "clinic_memberships"}
+RESOLVER_READABLE = {
+    "clinics",
+    "clinic_voice_agents",
+    "clinic_phone_numbers",
+    "clinic_memberships",
+    "clinic_invitations",
+}
 # Every SECURITY DEFINER function must be listed here after review, with the role that owns it.
 DEFINER_ALLOWLIST = {
     "resolve_clinic_for_call": "wassup_resolver",
     "staff_memberships": "wassup_resolver",
     "active_clinic_ids": "wassup_resolver",
     "audit_log_chain": "wassup_auditor",
+    # Team management (0011): the resolver's only write is the staff row for a verified sign-in.
+    "enrol_staff": "wassup_resolver",
+    "invited_clinics": "wassup_resolver",
+    "clinic_members": "wassup_resolver",
 }
 # The only table the auditor role may touch (the per-clinic audit chain heads: hashes, no data).
 AUDITOR_TABLES = {"audit_chain_heads"}

@@ -4,9 +4,13 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-09-27
+## [0.1.1] - 2026-09-26
 
-First release: everything below shipped to `integration` between 24 and 26 September 2026 and ran on staging, the final candidate for 24 hours under synthetic traffic.
+- Clinic onboarding without SQL: db-admin `WASSUP_ROLE=onboard-clinic` creates a clinic, maps its voice agents and numbers, and makes its first owner a member (dry run by default, audited, production acknowledgement). go-live §3 and the team runbook updated (an invitation can't create a first owner).
+
+## [0.1.0] - 2026-09-26
+
+First release: everything below shipped to `integration` between 24 and 26 September 2026 and ran on staging. Released while the final candidate's 24-hour staging soak was still running on the same tree (clean at release).
 
 - Nightly encrypted backups (ops-worker) taken as a new read-only `wassup_backup` role, verified by fetching the stored archive back and checking every table's hash and count; `/health/backup`; `db/restore.py` and the restore drill runbook. Migration `0013`; re-run the db-admin bootstrap first (`WASSUP_PASSWORD_BACKUP`).
 - Patient list import (`db/import_patients.py`), `lookup_patient` per-caller limits with a keyed caller hash, and a `verified` flag compared on one canonical phone form. Migration `0012`.

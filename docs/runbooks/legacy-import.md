@@ -47,6 +47,15 @@ Before September 2026 a lost webhook left messages captured during a call (`w1_m
 
 With `WASSUP_IMPORT_ORPHANS=true` they're imported under a **placeholder call**. It has no summary, its status is *To do*, and its time is the first message's time, so it shows up in the inbox. Legacy messages carry no clinic of their own. So use this only for a clinic whose agents were the only ones with message tools (in legacy, only one clinic's agent used them).
 
+## Old calls nobody actioned
+
+Legacy calls keep their status. Months-old calls that nobody marked are imported as *To do*: they fill the new inbox's To-do list and the office TV's waiting board.
+
+- Before the final import, check the dry run's numbers with the clinic.
+- Either have staff clear the old items in the legacy dashboard first, or agree that the first week in the new inbox includes working through that backlog.
+
+The import never changes a status on its own.
+
 ## During the cutover window
 
 Legacy staff can keep working until you switch them over. Run the import again just before the switch:

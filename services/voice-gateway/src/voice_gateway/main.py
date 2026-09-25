@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.app import create_app, schema_readiness
 from wassup_core.db import make_engine
 
+from voice_gateway.rules import RulesCache
 from voice_gateway.settings import VoiceGatewaySettings
 from voice_gateway.tools import router as tools_router
 from voice_gateway.webhook import router as webhook_router
@@ -18,9 +19,9 @@ from voice_gateway.webhook import router as webhook_router
 # max 154 KB (Sept 2026). Limits leave >30x headroom so a long call is never dropped.
 WEBHOOK_BODY_LIMIT = 5 * 1024 * 1024
 TOOL_BODY_LIMIT = 2 * 1024 * 1024
-# The newest schema object this service's code relies on (migration 0009). Bump it together with
+# The newest schema object this service's code relies on (migration 0010). Bump it together with
 # the migration that adds something voice-gateway needs: /health stays 503 until it exists.
-SCHEMA_PROBE = "SELECT has_column_privilege('messages', 'urgent', 'INSERT')"
+SCHEMA_PROBE = "SELECT has_column_privilege('calls', 'priority_level', 'INSERT')"
 
 
 def build_app(
@@ -34,6 +35,7 @@ def build_app(
         readiness=schema_readiness(SCHEMA_PROBE),
     )
     app.state.engine = engine
+    app.state.rules = RulesCache()  # each clinic's active classification rules, briefly cached
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:

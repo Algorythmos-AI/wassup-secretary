@@ -120,7 +120,7 @@ export function CallPanel({ clinicId, callId, timeZone, canEdit, refreshSignal, 
       {call && detail && (
         <>
           <header className="panel__header">
-            <h2>{humanizeIntent(call.intent)}</h2>
+            <h2>{call.action_label ?? humanizeIntent(call.intent)}</h2>
             <p className="panel__meta">
               {call.started_at
                 ? `${formatDayLabel(localParts(call.started_at, timeZone).date, today)} at ${formatTime(call.started_at, timeZone)}`

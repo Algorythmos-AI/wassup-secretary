@@ -30,14 +30,15 @@ Set these on the `db-admin` service in the **target** environment:
 | `WASSUP_IMPORT_PRACTICE_NAMES` | optional, `\|`-separated legacy practice names |
 | `WASSUP_IMPORT_ORPHANS` | `true` only when **every** legacy message and promise belongs to this clinic (see below) |
 | `WASSUP_IMPORT_APPLY` | leave unset for the first run |
+| `WASSUP_PRODUCTION_ACK` | in production only, and only when applying: the clinic slug again, typed deliberately (a leftover value for another clinic is refused) |
 
 1. **Dry run.** Deploy `db-admin`: `scripts/deploy-railway.sh <env> db-admin`. Then read its log. It ends `dry run: verified, then rolled back`. Check the counts:
    - `source.calls` against the legacy dashboard's call count for this clinic.
    - `calls.inserted` + `calls.kept_live_or_changed_here` + `calls.refreshed` = `source.calls` + `calls.placeholder_for_orphans`.
    - `messages.not_this_clinic_or_orphan_skipped` is the number of messages left in legacy. They belong to other clinics, or to calls whose webhook was lost (see orphans).
    - `left_behind.*` counts are values this system deliberately doesn't store: caller names, dates of birth, free-text actor names, promise subjects.
-2. **Apply.** Set `WASSUP_IMPORT_APPLY=true`, deploy `db-admin` again, and check the log ends `committed`. An `audit_log` row (`legacy.import`) records the counts.
-3. **Clean up.** Delete `WASSUP_LEGACY_DATABASE_URL` and `WASSUP_IMPORT_APPLY` from `db-admin`, and set `WASSUP_ROLE=report`.
+2. **Apply.** Set `WASSUP_IMPORT_APPLY=true` (and, in production, `WASSUP_PRODUCTION_ACK=<slug>`), deploy `db-admin` again, and check the log ends `committed`. An `audit_log` row (`legacy.import`) records the counts.
+3. **Clean up.** Delete `WASSUP_LEGACY_DATABASE_URL`, `WASSUP_IMPORT_APPLY` and `WASSUP_PRODUCTION_ACK` from `db-admin`, and set `WASSUP_ROLE=report`.
 
 If a run prints `import refused: verification failed`, nothing was committed. The `verify failed, …` lines name the table and field that differed, but never the values. Fix the cause and run again.
 

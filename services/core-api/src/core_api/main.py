@@ -18,9 +18,9 @@ from core_api.events import router as events_router
 from core_api.routes import router
 from core_api.settings import CoreApiSettings
 
-# The newest schema object this service's code relies on (migration 0009). Bump it together with
+# The newest schema object this service's code relies on (migration 0010). Bump it together with
 # the migration that adds something core-api needs: /health stays 503 until it exists.
-SCHEMA_PROBE = "SELECT has_column_privilege('messages', 'urgent', 'SELECT')"
+SCHEMA_PROBE = "SELECT has_column_privilege('calls', 'priority_level', 'SELECT')"
 
 
 def build_app(

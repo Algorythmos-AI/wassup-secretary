@@ -6,6 +6,8 @@
 #   WASSUP_ROLE=bootstrap         run db/bootstrap.py once (roles + passwords) and exit
 #   WASSUP_ROLE=seed-synthetic    seed a synthetic clinic (refused in production) and exit
 #   WASSUP_ROLE=report            print counts only (no personal data) and exit
+#   WASSUP_ROLE=import-legacy     import one clinic's legacy history (db/import_legacy.py; a
+#                                 dry run unless WASSUP_IMPORT_APPLY=true) and exit
 #   WASSUP_MIGRATE_ON_START=true  (serve) apply migrations before starting — for platforms where
 #                                 the image's pre-deploy step isn't configured. Migrations hold an
 #                                 advisory lock, so concurrent starts are safe.
@@ -20,6 +22,9 @@ case "${WASSUP_ROLE:-serve}" in
     ;;
   report)
     exec python db/report.py
+    ;;
+  import-legacy)
+    exec python db/import_legacy.py
     ;;
   serve)
     if [ "${WASSUP_MIGRATE_ON_START:-false}" = "true" ]; then

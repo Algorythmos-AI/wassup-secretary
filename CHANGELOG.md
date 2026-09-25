@@ -4,14 +4,16 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-27
+
+First release: everything below shipped to `integration` between 24 and 26 September 2026 and ran on staging, the final candidate for 24 hours under synthetic traffic.
+
 - Nightly encrypted backups (ops-worker) taken as a new read-only `wassup_backup` role, verified by fetching the stored archive back and checking every table's hash and count; `/health/backup`; `db/restore.py` and the restore drill runbook. Migration `0013`; re-run the db-admin bootstrap first (`WASSUP_PASSWORD_BACKUP`).
 - Patient list import (`db/import_patients.py`), `lookup_patient` per-caller limits with a keyed caller hash, and a `verified` flag compared on one canonical phone form. Migration `0012`.
 - Team management from the dashboard: invitations, enrolment at sign-in, role changes. Migration `0011`.
-
-## [0.1.0] - 2026-09-25
-
-First release: everything below shipped to `integration` between 24 and 25 September 2026 and ran on staging.
-
+- Classifier: a generic rules engine with each clinic's rules as versioned data (`clinic_classifier_rules`, migration `0010`), classification at write time, and db-admin load, activate (rollback) and reclassify. Rollback rehearsed on staging.
+- Operator decisions without a SQL session: db-admin `WASSUP_ROLE=ops` (list, requeue or abandon dead outbox events, resolve quarantine, requeue quarantined webhooks), used by the outbox-dead-letter and quarantine runbooks.
+- uvicorn's access log stays off (it wrote full URLs with query strings); staging soak (`scripts/soak.py`) and load (`scripts/load.py`) tools; clock-change tests for stored local call times; readiness record `docs/readiness/2026-09-25-staging.md`.
 - Reception dashboard `apps/web` (React + TypeScript, typed from the committed OpenAPI contract): Firebase sign-in, inbox laid out as a day sheet with live updates, call panel with status changes (If-Match + Idempotency-Key), analytics, usage (admins), office TV board, Australian number formatting. Served by Caddy with CSP/HSTS, no source maps, a real 404 for missing assets, and `/version.json` so screens reload themselves after a deploy. A build with missing or wrong settings shows a page naming them.
 - Messages keep their urgency at rest (`messages.urgent`, migration `0009`, backfilled from alert events); the call list and detail carry `has_urgent_message`; `open_only` and `order=oldest` on the call list; voice cost is withheld server-side below admin.
 - Legacy history import `db/import_legacy.py` (one clinic per run, dry run by default, one verified transaction, idempotent, counts-only output; a production apply needs a per-clinic acknowledgement) with runbook `legacy-import.md`.

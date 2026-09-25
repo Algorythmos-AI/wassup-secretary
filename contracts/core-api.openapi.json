@@ -764,6 +764,70 @@
         "title": "Interaction",
         "type": "object"
       },
+      "Invitation": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "viewer",
+              "receptionist",
+              "admin",
+              "owner"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "created_at"
+        ],
+        "title": "Invitation",
+        "type": "object"
+      },
+      "InviteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "maxLength": 254,
+            "minLength": 3,
+            "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+            "title": "Email",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "viewer",
+              "receptionist",
+              "admin",
+              "owner"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "role"
+        ],
+        "title": "InviteRequest",
+        "type": "object"
+      },
       "Me": {
         "properties": {
           "clinics": {
@@ -783,6 +847,123 @@
           "clinics"
         ],
         "title": "Me",
+        "type": "object"
+      },
+      "Member": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "viewer",
+              "receptionist",
+              "admin",
+              "owner"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          },
+          "staff_user_id": {
+            "format": "uuid",
+            "title": "Staff User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "staff_user_id",
+          "email",
+          "display_name",
+          "role",
+          "since"
+        ],
+        "title": "Member",
+        "type": "object"
+      },
+      "RoleChange": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "enum": [
+              "viewer",
+              "receptionist",
+              "admin",
+              "owner"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "RoleChange",
+        "type": "object"
+      },
+      "Team": {
+        "properties": {
+          "invitations": {
+            "description": "Open invitations (not yet accepted)",
+            "items": {
+              "$ref": "#/components/schemas/Invitation"
+            },
+            "title": "Invitations",
+            "type": "array"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            },
+            "title": "Members",
+            "type": "array"
+          }
+        },
+        "required": [
+          "members",
+          "invitations"
+        ],
+        "title": "Team",
+        "type": "object"
+      },
+      "TeamChange": {
+        "description": "What happened, so the screen can update without a reload.",
+        "properties": {
+          "action": {
+            "enum": [
+              "invited",
+              "role_changed",
+              "removed",
+              "invitation_revoked"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "team": {
+            "$ref": "#/components/schemas/Team"
+          }
+        },
+        "required": [
+          "action",
+          "team"
+        ],
+        "title": "TeamChange",
         "type": "object"
       },
       "Totals": {
@@ -1411,6 +1592,254 @@
           }
         },
         "summary": "Clinic Events"
+      }
+    },
+    "/v1/clinics/{clinic_id}/team": {
+      "get": {
+        "operationId": "team_v1_clinics__clinic_id__team_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Team"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Team"
+      }
+    },
+    "/v1/clinics/{clinic_id}/team/invitations": {
+      "post": {
+        "operationId": "invite_v1_clinics__clinic_id__team_invitations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamChange"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Invite"
+      }
+    },
+    "/v1/clinics/{clinic_id}/team/invitations/{invitation_id}": {
+      "delete": {
+        "operationId": "revoke_invitation_v1_clinics__clinic_id__team_invitations__invitation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "invitation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Invitation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamChange"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Invitation"
+      }
+    },
+    "/v1/clinics/{clinic_id}/team/members/{staff_user_id}": {
+      "delete": {
+        "operationId": "remove_member_v1_clinics__clinic_id__team_members__staff_user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "staff_user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Staff User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamChange"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Member"
+      },
+      "patch": {
+        "operationId": "change_role_v1_clinics__clinic_id__team_members__staff_user_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clinic_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Clinic Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "staff_user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Staff User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamChange"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change Role"
       }
     },
     "/v1/clinics/{clinic_id}/usage": {

@@ -6,6 +6,7 @@ import { Analytics } from "./pages/Analytics";
 import { Inbox } from "./pages/Inbox";
 import { NoAccess } from "./pages/NoAccess";
 import { SignIn } from "./pages/SignIn";
+import { Team } from "./pages/Team";
 import { Tv } from "./pages/Tv";
 import { Usage } from "./pages/Usage";
 
@@ -48,6 +49,7 @@ function SignedIn() {
         <Route path="inbox" element={<Inbox />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="usage" element={<Usage />} />
+        <Route path="team" element={<Team />} />
       </Route>
       <Route path="*" element={first ? <Navigate to={`/c/${first.id}/inbox`} replace /> : <NoAccess reason="no_access" />} />
     </Routes>

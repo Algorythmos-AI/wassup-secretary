@@ -23,13 +23,23 @@ APP_ROLES = (
 )
 LOGIN_APP_ROLES = ("app_voice", "app_core", "app_ops", "wassup_migrator")
 # The only tables the resolver role may read, and only through FOR SELECT policies.
-RESOLVER_READABLE = {"clinics", "clinic_voice_agents", "clinic_phone_numbers", "clinic_memberships"}
+RESOLVER_READABLE = {
+    "clinics",
+    "clinic_voice_agents",
+    "clinic_phone_numbers",
+    "clinic_memberships",
+    "clinic_invitations",
+}
 # Every SECURITY DEFINER function must be listed here after review, with the role that owns it.
 DEFINER_ALLOWLIST = {
     "resolve_clinic_for_call": "wassup_resolver",
     "staff_memberships": "wassup_resolver",
     "active_clinic_ids": "wassup_resolver",
     "audit_log_chain": "wassup_auditor",
+    # Team management (0011): the resolver's only write is the staff row for a verified sign-in.
+    "enrol_staff": "wassup_resolver",
+    "invited_clinics": "wassup_resolver",
+    "clinic_members": "wassup_resolver",
 }
 # The only table the auditor role may touch (the per-clinic audit chain heads: hashes, no data).
 AUDITOR_TABLES = {"audit_chain_heads"}
@@ -192,6 +202,25 @@ def test_resolver_role_cannot_read_call_data(db_engine: Engine) -> None:
             )
         ).all()
     assert {r.table_name for r in rows} <= RESOLVER_READABLE | {"staff_users"}
+
+
+def test_resolver_role_writes_only_the_staff_row(db_engine: Engine) -> None:
+    """The resolver reads routing tables; its only write is creating or refreshing a staff row
+    for a verified sign-in (0011). Anything wider would let a definer function hand out access."""
+    with db_engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT table_name, privilege_type FROM information_schema.role_table_grants
+                WHERE grantee = 'wassup_resolver' AND table_schema = 'public'
+                  AND privilege_type <> 'SELECT'
+                """
+            )
+        ).all()
+    assert {(r.table_name, r.privilege_type) for r in rows} <= {
+        ("staff_users", "INSERT"),
+        ("staff_users", "UPDATE"),
+    }
 
 
 def test_auditor_role_touches_only_the_chain_heads(db_engine: Engine) -> None:

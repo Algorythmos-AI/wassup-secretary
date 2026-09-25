@@ -8,6 +8,9 @@ import type {
   CallDetail,
   CallPage,
   Me,
+  Role,
+  Team,
+  TeamChange,
   UsageReport,
   WorkflowResult,
   WorkflowStatus,
@@ -103,5 +106,31 @@ export class Api {
   usage(clinicId: string, range: { from?: string; to?: string } = {}): Promise<UsageReport> {
     const params = new URLSearchParams(Object.entries(range).filter(([, v]) => v) as [string, string][]);
     return this.request(`/v1/clinics/${seg(clinicId)}/usage?${params}`);
+  }
+
+  team(clinicId: string): Promise<Team> {
+    return this.request(`/v1/clinics/${seg(clinicId)}/team`);
+  }
+
+  invite(clinicId: string, email: string, role: Role): Promise<TeamChange> {
+    return this.request(`/v1/clinics/${seg(clinicId)}/team/invitations`, {
+      method: "POST",
+      body: JSON.stringify({ email, role }),
+    });
+  }
+
+  revokeInvitation(clinicId: string, invitationId: string): Promise<TeamChange> {
+    return this.request(`/v1/clinics/${seg(clinicId)}/team/invitations/${seg(invitationId)}`, { method: "DELETE" });
+  }
+
+  setRole(clinicId: string, staffUserId: string, role: Role): Promise<TeamChange> {
+    return this.request(`/v1/clinics/${seg(clinicId)}/team/members/${seg(staffUserId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    });
+  }
+
+  removeMember(clinicId: string, staffUserId: string): Promise<TeamChange> {
+    return this.request(`/v1/clinics/${seg(clinicId)}/team/members/${seg(staffUserId)}`, { method: "DELETE" });
   }
 }

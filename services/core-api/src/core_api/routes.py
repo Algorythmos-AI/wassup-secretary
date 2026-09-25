@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from wassup_core.db import clinic_scope
 
+from core_api.schemas import CallDetail, CallPage, Me, WorkflowResult
 from core_api.staff import Staff, current_staff
 
 router = APIRouter(prefix="/v1")
@@ -80,7 +81,7 @@ async def _audit(
     )
 
 
-@router.get("/me")
+@router.get("/me", response_model=Me)
 async def me(staff: StaffDep, request: Request) -> dict[str, Any]:
     async with clinic_scope(_engine(request), list(staff.roles)) as conn:
         clinics = (
@@ -90,9 +91,7 @@ async def me(staff: StaffDep, request: Request) -> dict[str, Any]:
         )
     return {
         "email": staff.email,
-        "clinics": [
-            {**{k: str(v) for k, v in c.items()}, "role": staff.roles[c["id"]]} for c in clinics
-        ],
+        "clinics": [{**dict(c), "role": staff.roles[c["id"]]} for c in clinics],
     }
 
 
@@ -113,7 +112,7 @@ _AFTER_DATED = text(
 _AFTER_UNDATED = text(_LIST_SELECT + "AND started_at IS NULL AND id < :last_id" + _LIST_ORDER)
 
 
-@router.get("/clinics/{clinic_id}/calls")
+@router.get("/clinics/{clinic_id}/calls", response_model=CallPage)
 async def list_calls(
     clinic_id: uuid.UUID,
     staff: StaffDep,
@@ -147,17 +146,24 @@ async def list_calls(
     return {"items": page, "next_cursor": next_cursor}
 
 
-@router.get("/clinics/{clinic_id}/calls/{call_id}")
+_DETAIL = text(
+    """
+    SELECT id, provider_call_id, direction, from_number, to_number, started_at, ended_at,
+           duration_seconds, cost_usd::text AS cost_usd, disconnection_reason, summary, transcript,
+           sentiment, intent, is_priority, is_reception_action, local_date, local_hour,
+           workflow_status, version, analyzed_at
+    FROM calls WHERE id = :id
+    """
+)
+
+
+@router.get("/clinics/{clinic_id}/calls/{call_id}", response_model=CallDetail)
 async def call_detail(
     clinic_id: uuid.UUID, call_id: uuid.UUID, staff: StaffDep, request: Request
 ) -> dict[str, Any]:
     staff.require(clinic_id)
     async with clinic_scope(_engine(request), [clinic_id]) as conn:
-        call = (
-            (await conn.execute(text("SELECT * FROM calls WHERE id = :id"), {"id": call_id}))
-            .mappings()
-            .first()
-        )
+        call = (await conn.execute(_DETAIL, {"id": call_id})).mappings().first()
         if call is None:
             raise HTTPException(status_code=404, detail="Not found")
         messages = (
@@ -210,7 +216,7 @@ def _key_reused() -> HTTPException:
     )
 
 
-@router.post("/clinics/{clinic_id}/calls/{call_id}/workflow")
+@router.post("/clinics/{clinic_id}/calls/{call_id}/workflow", response_model=WorkflowResult)
 async def update_workflow(
     clinic_id: uuid.UUID,
     call_id: uuid.UUID,

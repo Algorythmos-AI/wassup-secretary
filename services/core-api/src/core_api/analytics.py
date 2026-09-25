@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from wassup_core.db import clinic_scope
 
+from core_api.schemas import AnalyticsSummary, UsageReport
 from core_api.staff import Staff, current_staff
 
 router = APIRouter(prefix="/v1")
@@ -95,7 +96,7 @@ def _range(timezone: str, from_date: date | None, to_date: date | None) -> tuple
     return start, end
 
 
-@router.get("/clinics/{clinic_id}/analytics/summary")
+@router.get("/clinics/{clinic_id}/analytics/summary", response_model=AnalyticsSummary)
 async def summary(
     clinic_id: uuid.UUID,
     staff: StaffDep,
@@ -156,7 +157,7 @@ _USAGE = text(
 )
 
 
-@router.get("/clinics/{clinic_id}/usage")
+@router.get("/clinics/{clinic_id}/usage", response_model=UsageReport)
 async def usage(
     clinic_id: uuid.UUID,
     staff: StaffDep,

@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import pytest
 from core_api.main import build_app
+from core_api.schemas import CallRecord
 from core_api.settings import CoreApiSettings
 from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
@@ -323,3 +324,32 @@ async def test_hostile_cursors_are_400_not_500(
         f"/v1/clinics/{seed.clinic_a}/calls", params={"cursor": cursor}, headers=_auth(ADMIN_AB)
     )
     assert response.status_code == 400
+
+
+async def test_call_detail_exposes_only_the_documented_fields(
+    client: httpx.AsyncClient, seed: Seed
+) -> None:
+    body = (
+        await client.get(
+            f"/v1/clinics/{seed.clinic_a}/calls/{seed.call_a}", headers=_auth(RECEPTIONIST_A)
+        )
+    ).json()
+    assert set(body["call"]) == set(CallRecord.model_fields)
+    assert "clinic_id" not in body["call"] and "local_dow" not in body["call"]
+
+
+def test_openapi_describes_every_response() -> None:
+    settings = CoreApiSettings(environment=Environment.TEST, auth_mode="test")
+    schema = build_app(settings, engine=None).openapi()
+    for path, method, model in (
+        ("/v1/me", "get", "Me"),
+        ("/v1/clinics/{clinic_id}/calls", "get", "CallPage"),
+        ("/v1/clinics/{clinic_id}/calls/{call_id}", "get", "CallDetail"),
+        ("/v1/clinics/{clinic_id}/calls/{call_id}/workflow", "post", "WorkflowResult"),
+        ("/v1/clinics/{clinic_id}/analytics/summary", "get", "AnalyticsSummary"),
+        ("/v1/clinics/{clinic_id}/usage", "get", "UsageReport"),
+    ):
+        ref = schema["paths"][path][method]["responses"]["200"]["content"]["application/json"][
+            "schema"
+        ]
+        assert ref["$ref"].endswith(f"/{model}"), (path, ref)

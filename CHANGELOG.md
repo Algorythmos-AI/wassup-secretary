@@ -34,6 +34,9 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
   - Returns totals (calls, average and total duration, cost, priority, reception action), workflow counts, zero-filled daily, hourly and weekday series, sentiment and the top intents.
   - The range defaults to the last 30 clinic days and is capped at 400; viewer role and above.
   - Counts only, so nothing personal is read.
+- Typed staff API contract:
+  - Every core-api response is now an explicit Pydantic model. Call detail selects named columns rather than `SELECT *`, so internal columns can't leak.
+  - The OpenAPI document is committed as `contracts/core-api.openapi.json`, and CI fails if it drifts from the code.
 - Usage rollup:
   - ops-worker recomputes calls, minutes and voice-provider cost per clinic per local day every hour, over the last 4 days. It is idempotent and absorbs late analysis.
   - New endpoint `GET /v1/clinics/{id}/usage?from&to` for admins and owners (billing input).

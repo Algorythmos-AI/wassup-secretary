@@ -11,6 +11,7 @@ COPY pyproject.toml uv.lock ./
 COPY libs ./libs
 COPY services ./services
 COPY db ./db
+COPY deploy/entrypoint.sh ./deploy/entrypoint.sh
 RUN uv sync --frozen --no-dev --package "wassup-${SERVICE}"
 
 FROM python:3.12-slim-bookworm AS runtime
@@ -27,6 +28,5 @@ WORKDIR /app
 COPY --from=build --chown=app:app /app /app
 USER app
 EXPOSE 8080
-# 30 s graceful shutdown so in-flight voice tool calls finish during a deploy. uvicorn's own
-# access log is off: our structured request log never records query strings.
-CMD ["sh", "-c", "exec uvicorn $(echo ${SERVICE_MODULE} | tr - _).main:app --host 0.0.0.0 --port ${PORT:-8080} --timeout-graceful-shutdown 30 --no-server-header --no-access-log"]
+# Role (serve / bootstrap) and optional migrate-on-start come from the environment: see the script.
+CMD ["/app/deploy/entrypoint.sh"]

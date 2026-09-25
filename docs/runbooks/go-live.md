@@ -29,6 +29,33 @@ environment settings.
    `\password wassup_migrator`, `\password app_voice`, `\password app_core`, `\password app_ops`.
 4. Build one connection URL per role. Each service gets **only its own** URL.
 
+## 1b. Roles and passwords without anyone seeing them (Railway)
+Instead of steps 2 and 3 above, add a one-shot **`db-admin`** service. It runs `db/bootstrap.py`, which:
+- runs `roles.sql` and `grant_database.sql`;
+- sets each login role's password from variables that **Railway generates**.
+
+Set these on `db-admin`:
+- `SERVICE=ops-worker` (it reuses that image);
+- `WASSUP_ADMIN_DATABASE_URL=${{Postgres.DATABASE_URL}}`;
+- `WASSUP_PASSWORD_MIGRATOR`, `WASSUP_PASSWORD_APP_VOICE`, `WASSUP_PASSWORD_APP_CORE` and `WASSUP_PASSWORD_APP_OPS`, each set to `${{secret(40)}}`.
+
+The app services then reference those generated values, for example:
+`WASSUP_DATABASE_URL=postgresql://app_core:${{db-admin.WASSUP_PASSWORD_APP_CORE}}@${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}`.
+
+## 1c. Deploying exact commits
+Run `scripts/deploy-railway.sh <environment> db-admin ops-worker voice-gateway core-api` from a clean checkout of the branch you're deploying.
+
+For each service, the script:
+- exports `HEAD` with `git archive`;
+- places `deploy/railway/<service>.json` at the root as `railway.json`;
+- records the commit and tree, which `/health` reports;
+- runs `railway up`.
+
+Deploy in this order:
+1. `db-admin` creates the roles.
+2. `ops-worker` migrates in its pre-deploy step.
+3. The other services follow. They stay `not_ready` until the schema they need exists.
+
 ## 2. Services (one per image; same image in staging and production)
 
 Each service's build and deploy settings are code, in `deploy/railway/<service>.json`, and CI

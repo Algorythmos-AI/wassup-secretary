@@ -59,6 +59,19 @@ checkout of that tag: `scripts/deploy-railway.sh production ops-worker voice-gat
 Migrations are forward-only; a release whose migration cannot be undone is rolled back by deploying
 the previous images, which tolerate the newer schema (additive migrations only; see AGENTS.md).
 
+## Staging soak (before every release)
+
+A release candidate runs on staging for 24 hours under steady synthetic traffic first:
+
+```bash
+railway run -s voice-gateway -e staging -- uv run python scripts/soak.py --hours 24 --log soak.jsonl
+```
+
+Every 10 minutes it sends a signed webhook twice (exactly-once), a message and a patient lookup
+for the synthetic clinic, and checks every `/health` URL. It ends with per-step failures, median
+and p95 latency, and exits non-zero on any failure. Record that summary in the readiness
+document. It refuses production.
+
 ## Creating the production environment (once)
 
 Railway can duplicate an environment. From the linked project:

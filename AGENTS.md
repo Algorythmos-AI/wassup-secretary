@@ -7,27 +7,32 @@ except that the **Data** and **Public repository** rules below are never relaxed
 ## What this is
 WASSUP Secretary is a multi-clinic AI phone receptionist platform: a voice agent answers
 clinic calls, and staff work the resulting calls, messages and callbacks in a dashboard.
-It is written in Python and has three services plus one shared library:
+It is three Python services, one shared library, a web app and a set of operator tools:
 
 | Path | Role |
 |---|---|
-| `services/voice-gateway` | The only service the voice provider (Retell) talks to: signed webhooks and tool calls. Small, stateless, highest availability. |
-| `services/core-api` | Staff and dashboard API (`/v1`), authentication and clinic membership. |
-| `services/ops-worker` | Scheduled and background jobs: reconciliation, line checks, alerts, backups. |
-| `libs/wassup_core` | Shared domain, DB models, tenancy, auth, logging. No hand-copied code between services. |
-| `db/` | Alembic migrations. The only owner of the schema. |
+| `services/voice-gateway` | The only service the voice provider (Retell) talks to: signed webhooks and tool calls. Small, stateless, highest availability. Classifies analysed calls with the clinic's active rules. |
+| `services/core-api` | Staff and dashboard API (`/v1`): sign-in, clinic membership and team management, calls and workflow, analytics, usage, live events. |
+| `services/ops-worker` | Scheduled and background jobs: outbox delivery and alerts, replay, line checks, telephony and voice-config monitors, usage rollup, retention. (Backups are planned, not built: see the completion plan.) |
+| `apps/web` | The reception dashboard. Types are generated from `contracts/core-api.openapi.json`; CI fails if they drift. |
+| `libs/wassup_core` | Shared settings, DB access and tenancy, logging, the classification engine (`classify.py`). No hand-copied code between services. |
+| `db/` | Alembic migrations (the only owner of the schema) and the one-shot tools `db-admin` runs: `bootstrap.py`, `seed_synthetic.py`, `report.py`, `import_legacy.py`, `classifier_rules.py`. |
+| `tools/wassup-cli` | Voice-agent bindings: export, rebind, rollback. |
 
 The architecture and its decisions live in `docs/architecture.md` and `docs/adr/`.
 
 ## Branches and releases
-- `integration` is the default branch. Branch from it and open a PR into it.
-- `main` is production. It only changes through a release PR `integration → main` (a merge commit).
+- `integration` is the default branch. Branch from it and open a PR into it. Staging runs `integration`.
+- `main` is production. It only changes through a release PR `integration → main` (a merge commit), and production is deployed only from a `v*` tag on `main` (`docs/runbooks/release.md`).
 - PR titles use Conventional Commits: `feat(core-api): …`, `fix(voice-gateway): …`.
 - Never push directly to `integration` or `main`. Never force-push shared branches.
 
 ## Definition of done
 `make ci` is green locally. The same checks run in CI, and the required check is `ci-gate`.
 New behaviour has tests. A migration comes with a tenancy test for any new tenant table.
+Anything touching tenancy, auth, alerts, migrations, the import or the classifier gets an
+independent adversarial review before merge, and a test that fails without the fix. A production
+change comes with a rehearsed rollback.
 
 ## Migrations
 - Forward-only, one transaction per revision (`db/migrations/env.py`), always `SET ROLE wassup_owner`.
@@ -47,7 +52,8 @@ New behaviour has tests. A migration comes with a tenancy test for any new tenan
 
 ## Public repository (while `visibility: public`)
 - No secrets. Configuration comes from environment variables. `gitleaks` runs in pre-commit and CI.
-- No voice-agent prompts, production clinic config, phone numbers or agent IDs.
+- No voice-agent prompts, production clinic config, phone numbers, agent IDs, or clinic
+  classification vocabulary (rules are loaded into the database by the owner, never committed).
 - Nothing copied from any private Algorythmos repository, including the legacy
   `wassup-call-dashboard`. Re-implement from the design, not from the old code.
 

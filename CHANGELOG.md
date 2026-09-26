@@ -4,6 +4,10 @@ All notable changes are recorded here. Versions follow SemVer. One version cover
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-26
+
+- Google sign-in always shows the account picker. Before, Google silently reused the last account, so after signing out nobody could sign in as someone else on the same browser (a shared front-desk computer).
+
 ## [0.1.1] - 2026-09-26
 
 - Clinic onboarding without SQL: db-admin `WASSUP_ROLE=onboard-clinic` creates a clinic, maps its voice agents and numbers, and makes its first owner a member (dry run by default, audited, production acknowledgement). go-live §3 and the team runbook updated (an invitation can't create a first owner).

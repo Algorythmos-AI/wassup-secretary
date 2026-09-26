@@ -24,6 +24,16 @@ import {
 } from "react";
 import { config, firebaseOptions } from "../config";
 
+
+/** Google sign-in that always shows the account picker. Without it Google silently reuses the
+ * account last signed in, so on a shared front-desk computer the next person can't choose
+ * their own account, even after signing out. */
+export function googleProvider(): GoogleAuthProvider {
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
+  return provider;
+}
+
 export interface AuthContextValue {
   status: "loading" | "signed-out" | "signed-in";
   email: string | null;
@@ -116,7 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       mode,
       token,
       async signInWithGoogle() {
-        await signInWithPopup(auth(), new GoogleAuthProvider());
+        await signInWithPopup(auth(), googleProvider());
       },
       async signInWithEmail(email, password) {
         await signInWithEmailAndPassword(auth(), email.trim(), password);
